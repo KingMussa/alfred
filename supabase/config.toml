@@ -1,0 +1,10 @@
+project_id = "your-project-id"
+
+[functions.morning-briefing]
+verify_jwt = false
+
+[functions.email-checker]
+verify_jwt = false
+
+[functions.calendar-reminder]
+verify_jwt = false
