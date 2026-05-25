@@ -1,0 +1,56 @@
+name: Deploy Alfred to Supabase
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "supabase/functions/**"
+      - "supabase/migrations/**"
+      - ".github/workflows/deploy.yml"
+
+jobs:
+  typecheck:
+    name: Type-check Edge Functions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Deno
+        uses: denoland/setup-deno@v1
+        with:
+          deno-version: v1.x
+
+      - name: Type-check all functions
+        run: |
+          for fn in supabase/functions/*/index.ts; do
+            echo "Checking $fn..."
+            deno check "$fn"
+          done
+
+  deploy:
+    name: Deploy to Supabase
+    runs-on: ubuntu-latest
+    needs: typecheck
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Deploy Edge Functions
+        run: |
+          supabase functions deploy morning-briefing --project-ref ${{ secrets.SUPABASE_PROJECT_REF }}
+          supabase functions deploy email-checker    --project-ref ${{ secrets.SUPABASE_PROJECT_REF }}
+          supabase functions deploy calendar-reminder --project-ref ${{ secrets.SUPABASE_PROJECT_REF }}
+          supabase functions deploy telegram-webhook  --project-ref ${{ secrets.SUPABASE_PROJECT_REF }}
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+
+      - name: Run DB migrations (if any)
+        run: |
+          supabase db push --project-ref ${{ secrets.SUPABASE_PROJECT_REF }}
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        continue-on-error: true
