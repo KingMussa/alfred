@@ -54,6 +54,14 @@ import {
   getBillsDueSoon, getSpendingStatus, formatSpendingBlock,
 } from "../_shared/finance.ts";
 import { saveTurn, recentTurns, memoryBlock, audit, setPref, getPref } from "../_shared/memory.ts";
+import {
+  netWorthReport, formatNetWorthBlock,
+  getAssets, getLiabilities, updateAssetBalance, updateLiabilityBalance,
+  payoffReport, formatPayoffBlock,
+  getGoals, upsertGoal, fundGoal, formatGoalsBlock,
+} from "../_shared/wealth.ts";
+import { buildForecast, formatForecastBlock, dailyBudget, formatDailyBudgetBlock } from "../_shared/forecast.ts";
+import { getQuote, getQuotes, formatQuote, valuateHoldings, marketConfigured } from "../_shared/market.ts";
 
 const WEBHOOK_SECRET  = Deno.env.get("TELEGRAM_WEBHOOK_SECRET") ?? "";
 const ALLOWED_CHAT_ID = Deno.env.get("TELEGRAM_CHAT_ID") ?? "";
@@ -217,10 +225,10 @@ async function cmdJobsite(arg: string): Promise<string> {
   return `🔧 Jobsite log #${r.id} saved`;
 }
 
-async function cmdQuote(arg: string): Promise<string> {
-  if (!arg) return "💬 Send `/quote <text>` — good lines for captions/reels.";
+async function cmdLine(arg: string): Promise<string> {
+  if (!arg) return "💬 Send `/line <text>` — save a punchline / bar / quote for content.";
   const r = await saveCapture("quote", arg);
-  return `💬 Quote saved #${r.id}`;
+  return `💬 Line saved #${r.id}`;
 }
 
 async function cmdCaptures(): Promise<string> {
@@ -336,6 +344,311 @@ async function cmdQuiet(arg: string): Promise<string> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// v4 — NET WORTH / DEBT PAYOFF / GOALS
+// ─────────────────────────────────────────────────────────────────────────────
+async function cmdNet(): Promise<string> {
+  const r = await netWorthReport();
+  return formatNetWorthBlock(r);
+}
+
+async function cmdPayoff(): Promise<string> {
+  const plans = await payoffReport();
+  return formatPayoffBlock(plans);
+}
+
+async function cmdAssets(): Promise<string> {
+  const rows = await getAssets();
+  if (!rows.length) return "🏦 No assets tracked.";
+  const lines = ["🏦 ASSETS"];
+  for (const a of rows) {
+    lines.push(`${a.name} (${a.account_type}) — $${Number(a.balance).toLocaleString()}`);
+  }
+  lines.push(``, `Update: /asset <id> <new_balance>`);
+  lines.push(`List IDs: /asset list`);
+  return lines.join("\n");
+}
+
+async function cmdAsset(arg: string): Promise<string> {
+  if (arg === "list" || !arg) {
+    const rows = await getAssets();
+    return rows.map((a) => `${a.id}. ${a.name} ($${Number(a.balance).toLocaleString()})`).join("\n");
+  }
+  const m = arg.match(/(\d+)\s+\$?(\d+(?:\.\d+)?)/);
+  if (!m) return "Usage: /asset <id> <new_balance>  (find id via /asset list)";
+  await updateAssetBalance(parseInt(m[1], 10), parseFloat(m[2]));
+  return `✅ Updated asset #${m[1]} to $${m[2]}`;
+}
+
+async function cmdDebts(): Promise<string> {
+  const rows = await getLiabilities();
+  if (!rows.length) return "✅ No debts. Clean.";
+  const lines = ["💸 LIABILITIES"];
+  for (const l of rows) {
+    const apr = l.interest_rate ? ` @ ${Number(l.interest_rate).toFixed(1)}%` : "";
+    const pmt = l.min_payment ? ` (min $${l.min_payment}/mo)` : "";
+    lines.push(`${l.id}. ${l.name} — $${Number(l.balance).toLocaleString()}${apr}${pmt}`);
+  }
+  lines.push(``, `Update: /debt <id> <new_balance>`);
+  return lines.join("\n");
+}
+
+async function cmdDebt(arg: string): Promise<string> {
+  const m = arg.match(/(\d+)\s+\$?(\d+(?:\.\d+)?)/);
+  if (!m) return "Usage: /debt <id> <new_balance>  (find id via /debts)";
+  await updateLiabilityBalance(parseInt(m[1], 10), parseFloat(m[2]));
+  return `✅ Updated debt #${m[1]} to $${m[2]}`;
+}
+
+async function cmdGoals(): Promise<string> {
+  const goals = await getGoals();
+  return formatGoalsBlock(goals);
+}
+
+async function cmdGoal(arg: string): Promise<string> {
+  // Three modes:
+  //   /goal <name> $<target> [by YYYY-MM-DD]    → create/update goal
+  //   /goal fund <name> $<amount>               → add to bucket
+  if (!arg) return "Usage:\n/goal <name> $<target> [by YYYY-MM-DD]\n/goal fund <name> $<amount>";
+
+  const fundMatch = arg.match(/^fund\s+(.+?)\s+\$?(\d+(?:\.\d+)?)/i);
+  if (fundMatch) {
+    const g = await fundGoal(fundMatch[1].trim(), parseFloat(fundMatch[2]));
+    if (!g) return `❓ No goal "${fundMatch[1]}". /goals to list.`;
+    const pct = Math.round((g.current_amount / g.target_amount) * 100);
+    return `🎯 ${g.name}: $${Number(g.current_amount).toLocaleString()} / $${Number(g.target_amount).toLocaleString()} (${pct}%)`;
+  }
+
+  const m = arg.match(/^(.+?)\s+\$?(\d+(?:\.\d+)?)(?:\s+by\s+(\d{4}-\d{2}-\d{2}))?/);
+  if (!m) return "Usage: /goal <name> $<target> [by YYYY-MM-DD]";
+  await upsertGoal(m[1].trim(), parseFloat(m[2]), m[3]);
+  return `🎯 Goal "${m[1].trim()}" → $${m[2]}${m[3] ? ` by ${m[3]}` : ""}`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// v4 — CASH FLOW FORECAST
+// ─────────────────────────────────────────────────────────────────────────────
+async function cmdCash(): Promise<string> {
+  const b = await dailyBudget();
+  return formatDailyBudgetBlock(b);
+}
+
+async function cmdForecast(): Promise<string> {
+  const assets = await getAssets();
+  const startingBalance = assets
+    .filter((a) => ["checking", "savings", "mmsa"].includes(a.account_type))
+    .reduce((s, a) => s + Number(a.balance), 0);
+  const r = await buildForecast(startingBalance);
+  return formatForecastBlock(r);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// v4 — INVESTMENTS / PORTFOLIO
+// ─────────────────────────────────────────────────────────────────────────────
+async function cmdStockQuote(arg: string): Promise<string> {
+  if (!arg) return "Usage: /quote <symbol>   ex: /quote AAPL";
+  if (!marketConfigured()) {
+    return "🚫 Live quotes off.\nAdd FMP_API_KEY to Supabase secrets:\n1. Get free key at financialmodelingprep.com (250/day)\n2. `supabase secrets set FMP_API_KEY=...` from the dave-assistant repo\n3. Redeploy telegram-webhook";
+  }
+  const q = await getQuote(arg);
+  if (!q) return `❓ No quote for "${arg}"`;
+  return formatQuote(q);
+}
+
+async function cmdPortfolio(): Promise<string> {
+  const rows = await sbGet("/holdings?active=eq.true&order=symbol.asc&select=*") as Array<{
+    id: number; symbol: string; qty: number; cost_basis: number; account: string; asset_class: string;
+  }>;
+  if (!rows.length) return "📊 No holdings. Log one with:\n/buy <symbol> <qty> @ <price>\nex: /buy AAPL 10 @175";
+
+  if (!marketConfigured()) {
+    // Show cost basis only
+    const lines = ["📊 PORTFOLIO (cost basis only — add FMP_API_KEY for live)"];
+    let totalCost = 0;
+    for (const h of rows) {
+      const avg = Number(h.cost_basis) / Number(h.qty);
+      lines.push(`${h.symbol}  ${Number(h.qty)} sh · avg $${avg.toFixed(2)} · cost $${Number(h.cost_basis).toLocaleString()}`);
+      totalCost += Number(h.cost_basis);
+    }
+    lines.push(``, `Total cost: $${totalCost.toLocaleString()}`);
+    return lines.join("\n");
+  }
+
+  const valued = await valuateHoldings(rows);
+  let totalValue = 0, totalCost = 0;
+  const lines = ["📊 PORTFOLIO"];
+  for (const h of valued) {
+    totalCost += Number(h.cost_basis);
+    totalValue += h.currentValue ?? Number(h.cost_basis);
+    if (h.currentValue === null) {
+      lines.push(`${h.symbol} ${h.qty} sh · cost $${Number(h.cost_basis).toLocaleString()} · no quote`);
+      continue;
+    }
+    const arrow = (h.pnlPct ?? 0) >= 0 ? "▲" : "▼";
+    lines.push(`${arrow} ${h.symbol}  ${Number(h.qty)} sh · $${h.currentPrice?.toFixed(2)}`);
+    lines.push(`   Value $${h.currentValue.toLocaleString()} · P&L ${h.pnl! >= 0 ? "+" : ""}$${h.pnl!.toLocaleString()} (${h.pnlPct!.toFixed(1)}%)`);
+  }
+  const totalPnl = totalValue - totalCost;
+  const totalPct = totalCost > 0 ? ((totalPnl / totalCost) * 100).toFixed(1) : "0.0";
+  lines.push(``, `TOTAL: $${totalValue.toLocaleString()} · cost $${totalCost.toLocaleString()} · P&L ${totalPnl >= 0 ? "+" : ""}$${totalPnl.toLocaleString()} (${totalPct}%)`);
+  return lines.join("\n");
+}
+
+async function cmdBuy(arg: string): Promise<string> {
+  // /buy AAPL 10 @175  or  /buy AAPL 10 175
+  const m = arg.match(/^(\S+)\s+(\d+(?:\.\d+)?)\s+@?\s*\$?(\d+(?:\.\d+)?)(?:\s+(.+))?$/);
+  if (!m) return "Usage: /buy <symbol> <qty> @<price> [account]\nex: /buy AAPL 10 @175";
+  const [, sym, qtyStr, priceStr, acct] = m;
+  const qty = parseFloat(qtyStr);
+  const price = parseFloat(priceStr);
+  const cost = +(qty * price).toFixed(2);
+  const account = acct?.trim() || "Robinhood";
+
+  // Log trade + update holding (consolidate if symbol already exists)
+  await fetch(`${URL_TG}/rest/v1/trades`, {
+    method: "POST",
+    headers: { ...HDRS_TG, Prefer: "return=minimal" },
+    body: JSON.stringify({ symbol: sym.toUpperCase(), side: "buy", qty, price, account }),
+  });
+
+  const existingR = await fetch(`${URL_TG}/rest/v1/holdings?symbol=eq.${sym.toUpperCase()}&account=eq.${encodeURIComponent(account)}&active=eq.true&select=*`, { headers: HDRS_TG });
+  const existing = (await existingR.json()) as Array<{ id: number; qty: number; cost_basis: number }>;
+  if (existing.length) {
+    const newQty = Number(existing[0].qty) + qty;
+    const newCost = Number(existing[0].cost_basis) + cost;
+    await fetch(`${URL_TG}/rest/v1/holdings?id=eq.${existing[0].id}`, {
+      method: "PATCH",
+      headers: { ...HDRS_TG, Prefer: "return=minimal" },
+      body: JSON.stringify({ qty: newQty, cost_basis: newCost }),
+    });
+    return `📈 BUY ${qty} ${sym.toUpperCase()} @ $${price} — added to existing position. New: ${newQty} sh, avg $${(newCost/newQty).toFixed(2)}`;
+  } else {
+    await fetch(`${URL_TG}/rest/v1/holdings`, {
+      method: "POST",
+      headers: { ...HDRS_TG, Prefer: "return=minimal" },
+      body: JSON.stringify({ symbol: sym.toUpperCase(), qty, cost_basis: cost, account }),
+    });
+    return `📈 BUY ${qty} ${sym.toUpperCase()} @ $${price} ($${cost.toLocaleString()}) in ${account}`;
+  }
+}
+
+async function cmdSell(arg: string): Promise<string> {
+  // /sell AAPL 5 @180
+  const m = arg.match(/^(\S+)\s+(\d+(?:\.\d+)?)\s+@?\s*\$?(\d+(?:\.\d+)?)/);
+  if (!m) return "Usage: /sell <symbol> <qty> @<price>\nex: /sell AAPL 5 @180";
+  const [, sym, qtyStr, priceStr] = m;
+  const qty = parseFloat(qtyStr);
+  const price = parseFloat(priceStr);
+
+  await fetch(`${URL_TG}/rest/v1/trades`, {
+    method: "POST",
+    headers: { ...HDRS_TG, Prefer: "return=minimal" },
+    body: JSON.stringify({ symbol: sym.toUpperCase(), side: "sell", qty, price }),
+  });
+
+  const existingR = await fetch(`${URL_TG}/rest/v1/holdings?symbol=eq.${sym.toUpperCase()}&active=eq.true&select=*`, { headers: HDRS_TG });
+  const existing = (await existingR.json()) as Array<{ id: number; qty: number; cost_basis: number }>;
+  if (!existing.length) return `❓ No active position in ${sym.toUpperCase()}`;
+
+  const newQty = Number(existing[0].qty) - qty;
+  if (newQty <= 0.0001) {
+    // Close it out
+    await fetch(`${URL_TG}/rest/v1/holdings?id=eq.${existing[0].id}`, {
+      method: "PATCH",
+      headers: { ...HDRS_TG, Prefer: "return=minimal" },
+      body: JSON.stringify({ active: false, closed_at: new Date().toISOString() }),
+    });
+    const proceeds = qty * price;
+    const pnl = proceeds - Number(existing[0].cost_basis);
+    return `📉 SELL ${qty} ${sym.toUpperCase()} @ $${price} — POSITION CLOSED. P&L ${pnl >= 0 ? "+" : ""}$${pnl.toLocaleString()}`;
+  } else {
+    // Reduce qty proportionally; cost basis scales down
+    const newCost = +(Number(existing[0].cost_basis) * (newQty / Number(existing[0].qty))).toFixed(2);
+    await fetch(`${URL_TG}/rest/v1/holdings?id=eq.${existing[0].id}`, {
+      method: "PATCH",
+      headers: { ...HDRS_TG, Prefer: "return=minimal" },
+      body: JSON.stringify({ qty: newQty, cost_basis: newCost }),
+    });
+    return `📉 SELL ${qty} ${sym.toUpperCase()} @ $${price}. Position: ${newQty} sh remaining, cost $${newCost.toLocaleString()}`;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// v4 — DECISION LOG
+// ─────────────────────────────────────────────────────────────────────────────
+async function cmdLogDecision(arg: string): Promise<string> {
+  // /decide <decision> :: <rationale> :: <expected outcome>
+  if (!arg) return "Usage: /decide <decision> :: <rationale> :: <expected outcome>\nex: /decide Apply $1k extra to IRS :: Cuts payoff by 2 weeks :: Less interest, locked feeling";
+  const parts = arg.split("::").map((s) => s.trim());
+  const [decision, rationale, expected] = [parts[0], parts[1] ?? null, parts[2] ?? null];
+  if (!decision) return "Need a decision before the ::";
+  const reviewDate = new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10);
+  const r = await fetch(`${URL_TG}/rest/v1/decisions`, {
+    method: "POST",
+    headers: { ...HDRS_TG, Prefer: "return=representation" },
+    body: JSON.stringify({
+      decision, rationale, expected_outcome: expected,
+      review_date: reviewDate,
+      category: null,
+    }),
+  });
+  const rows = (await r.json()) as Array<{ id: number }>;
+  return `🧠 Decision #${rows[0]?.id} logged. Review in 30d (${reviewDate}).`;
+}
+
+async function cmdDecisions(): Promise<string> {
+  const r = await fetch(`${URL_TG}/rest/v1/decisions?order=decided_at.desc&limit=10&select=*`, { headers: HDRS_TG });
+  const rows = (await r.json()) as Array<{
+    id: number; decision: string; rationale: string | null; reviewed: boolean; decided_at: string;
+  }>;
+  if (!rows.length) return "🧠 No decisions logged yet. /decide to start.";
+  const lines = ["🧠 RECENT DECISIONS"];
+  for (const d of rows) {
+    const flag = d.reviewed ? "✅" : "⏳";
+    const date = new Date(d.decided_at).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+    lines.push(`${flag} #${d.id} (${date}) ${d.decision.slice(0, 80)}`);
+  }
+  return lines.join("\n");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// v4 — AI MONTHLY ANALYSIS
+// ─────────────────────────────────────────────────────────────────────────────
+async function cmdAnalyze(): Promise<string> {
+  // Aggregate: net worth, spending YTD, IRS pace, captures, habits, decisions
+  const [nw, irs, spending, payoffs, goals] = await Promise.all([
+    netWorthReport(),
+    getIrsSnapshot(),
+    getSpendingStatus(),
+    payoffReport(),
+    getGoals(),
+  ]);
+
+  const prompt = `You are Alfred. Dave just asked /analyze. Write a SHORT (under 800 chars) financial diagnostic.
+
+NUMBERS:
+- Net worth: $${nw.current.net_worth.toLocaleString()} (assets $${nw.current.assets_total.toLocaleString()}, debts $${nw.current.liabilities_total.toLocaleString()})
+- 30-day delta: ${nw.delta30 !== null ? "$" + nw.delta30.toLocaleString() : "no data"}
+- IRS: $${irs.balance.toLocaleString()} left, ${irs.daysToTarget}d to Feb 2027, $${irs.monthlyPaceRequired}/mo pace required, ${irs.onTrack ? "ON TRACK" : "BEHIND"}
+- Top spending leaks (over 60%): ${spending.filter((s) => s.pct >= 60).map((s) => `${s.category} ${s.pct}%`).join(", ") || "none"}
+- Goals: ${goals.map((g) => `${g.name} ${Math.round((g.current_amount/g.target_amount)*100)}%`).join(" · ") || "none set"}
+
+WRITE EXACTLY:
+1. ONE sentence diagnosis ("here's where you stand")
+2. ONE biggest leak or risk
+3. ONE specific move this week (dollar amount + action)
+4. ONE short line of encouragement (Alfred-flavored)
+
+Plain text, no markdown.`;
+
+  const r = await aiChat(prompt, 800);
+  return `📈 ALFRED'S READ\n\n${r}`;
+}
+
+// Shared local refs so handlers can call REST directly
+const URL_TG     = "https://rwhfueaclqcunnoraaix.supabase.co";
+const HDRS_TG    = headers();
+
+// ─────────────────────────────────────────────────────────────────────────────
 // BRIEFING TRIGGERS + existing slash commands
 // ─────────────────────────────────────────────────────────────────────────────
 async function cmdStart(): Promise<string> {
@@ -343,24 +656,39 @@ async function cmdStart(): Promise<string> {
     "🦇 Alfred at your service, Master Wayne.",
     "",
     "QUICK CAPTURE",
-    "  /note <text>   — save a note",
-    "  /idea <text>   — content idea (#ig #tiktok #yt #reel)",
-    "  /todo <text>   — add todo · /done <id> · /todos",
-    "  /win <text>    — log a win for Sunday review",
-    "  /jobsite       — jobsite story material",
-    "  /quote         — save a line for content",
-    "  /captures      — last 48h dump",
+    "  /note · /idea · /todo · /done · /todos",
+    "  /win · /jobsite · /line · /captures",
+    "  (/line = save a punchline/bar for content)",
     "",
-    "FINANCIAL",
-    "  /irs           — IRS countdown",
-    "  /pay <amt>     — record IRS payment",
-    "  /bills         — due in 14 days",
-    "  /spending      — vs monthly caps",
+    "FINANCIAL — DAY-TO-DAY",
+    "  /irs · /pay <amt> · /bills · /spending",
     "  /expense <amt> <cat> [note]",
+    "  /cash      — today's safe-to-spend",
+    "  /forecast  — 90-day cash flow",
+    "",
+    "FINANCIAL — WEALTH MODELING (NEW)",
+    "  /net       — net worth + 7d/30d delta",
+    "  /assets · /asset <id> <bal>",
+    "  /debts · /debt <id> <bal>",
+    "  /payoff    — debt payoff projection",
+    "  /goals · /goal <name> $<amt> by <date>",
+    "  /goal fund <name> $<amt>",
+    "",
+    "INVESTMENTS (NEW)",
+    "  /quote <symbol>           — live price (FMP)",
+    "  /portfolio                — holdings + P&L",
+    "  /buy <sym> <qty> @<price> — log a buy",
+    "  /sell <sym> <qty> @<price>",
+    "",
+    "DECISIONS (NEW)",
+    "  /decide <what> :: <why> :: <expected outcome>",
+    "  /decisions                — last 10",
+    "",
+    "ANALYSIS",
+    "  /analyze   — Alfred's monthly read",
     "",
     "HABITS & JOURNAL",
-    "  /habits · /habit <name>",
-    "  /journal <text>",
+    "  /habits · /habit · /journal [mood:N] <text>",
     "",
     "BRIEFINGS",
     "  /briefing · /digest · /recap",
@@ -622,15 +950,39 @@ async function route(text: string): Promise<string> {
   if (lc.startsWith("/done"))     return cmdDone(arg);
   if (lc.startsWith("/win"))      return cmdWin(arg);
   if (lc.startsWith("/jobsite"))  return cmdJobsite(arg);
-  if (lc.startsWith("/quote"))    return cmdQuote(arg);
+  if (lc.startsWith("/line"))     return cmdLine(arg);
   if (lc.startsWith("/captures")) return cmdCaptures();
 
-  // Financial
+  // Financial — day-to-day
   if (lc.startsWith("/irs"))      return cmdIrs();
   if (lc.startsWith("/pay"))      return cmdPay(arg);
   if (lc.startsWith("/bills"))    return cmdBills();
   if (lc.startsWith("/spending")) return cmdSpending();
   if (lc.startsWith("/expense"))  return cmdExpense(arg);
+  if (lc.startsWith("/cash"))     return cmdCash();
+  if (lc.startsWith("/forecast")) return cmdForecast();
+
+  // v4 — Wealth modeling
+  if (lc.startsWith("/networth")) return cmdNet();
+  if (lc.startsWith("/net"))      return cmdNet();
+  if (lc.startsWith("/assets"))   return cmdAssets();
+  if (lc.startsWith("/asset"))    return cmdAsset(arg);
+  if (lc.startsWith("/debts"))    return cmdDebts();
+  if (lc.startsWith("/debt"))     return cmdDebt(arg);
+  if (lc.startsWith("/payoff"))   return cmdPayoff();
+  if (lc.startsWith("/goals"))    return cmdGoals();
+  if (lc.startsWith("/goal"))     return cmdGoal(arg);
+
+  // v4 — Investments
+  if (lc.startsWith("/quote"))    return cmdStockQuote(arg);
+  if (lc.startsWith("/portfolio")) return cmdPortfolio();
+  if (lc.startsWith("/buy"))      return cmdBuy(arg);
+  if (lc.startsWith("/sell"))     return cmdSell(arg);
+
+  // v4 — Decisions + analysis
+  if (lc.startsWith("/decisions")) return cmdDecisions();
+  if (lc.startsWith("/decide"))   return cmdLogDecision(arg);
+  if (lc.startsWith("/analyze"))  return cmdAnalyze();
 
   // Habits + journal
   if (lc.startsWith("/habits"))   return cmdHabits();

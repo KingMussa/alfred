@@ -1,7 +1,19 @@
 # Alfred — Status
 
-**Version: v3-robust  · Last upgrade: 2026-05-26**
+**Version: v4-wealth  · Last upgrade: 2026-05-26**
 **Live since: 2026-05-23**
+
+## v4 (2026-05-26) — Wealth modeling + investments + decisions
+- Net worth tracker (8 assets, 2 liabilities seeded → current NW $−14,218)
+- Daily net worth snapshots with 7d/30d/since-start deltas
+- Debt payoff calculator (IRS Feb 2027 on track, Auto Loan needs balance confirm)
+- Goal buckets (Emergency Fund $15k, House Down $40k, Roth IRA $7k, Triple D $6k)
+- 90-day cash-flow forecast with danger-date detection
+- Daily safe-to-spend allowance (pace-aware)
+- Portfolio + trades (Robinhood seeded empty, FMP free tier for live quotes)
+- Decision log with 30-day auto-review
+- `/analyze` — AI-driven monthly financial diagnostic
+- 13 new Telegram commands (see full list below)
 
 Supabase project `alfred` (ref `rwhfueaclqcunnoraaix`, us-east-1).
 
@@ -30,6 +42,7 @@ Supabase project `alfred` (ref `rwhfueaclqcunnoraaix`, us-east-1).
 | 7 | bill-reminder | `0 15 * * *` (8 AM PT) |
 | 8 | health-check | `7 * * * *` (hourly) |
 | 9 | weekly-review | `0 2 * * 1` (Sun 7 PM PT) |
+| 18 | daily-networth | `0 6 * * *` (11 PM PT) |
 | 10 | purge-conversation | `30 3 * * *` |
 | 11 | purge-telemetry | `45 3 * * 0` |
 
@@ -46,37 +59,54 @@ Supabase project `alfred` (ref `rwhfueaclqcunnoraaix`, us-east-1).
 | `weekly-review` | ✓ | NEW v1 |
 | `telegram-webhook` | ✗ | Uses X-Telegram-Bot-Api-Secret-Token |
 
-## Telegram slash commands (v3)
+## Telegram slash commands (v4)
 
 ```
-SYSTEM        /help /status /version /quiet 22:00-06:30
+SYSTEM       /help /status /version /quiet 22:00-06:30
 
-CAPTURE       /note /idea /todo /todos /done <id>
-              /win /jobsite /quote /captures
+CAPTURE      /note /idea /todo /todos /done /win /jobsite /line /captures
 
-FINANCIAL     /irs        — countdown to Feb 2027
-              /pay <amt>  — record IRS payment
-              /bills      — due in 14 days
-              /spending   — vs monthly caps
-              /expense <amt> <category> [note]
+FINANCIAL    /irs · /pay <amt> · /bills · /spending
+DAY-TO-DAY   /expense <amt> <cat> [note]
+             /cash       — today's safe-to-spend
+             /forecast   — 90-day projection w/ danger dates
 
-HABITS        /habits · /habit <name>
-JOURNAL       /journal [mood:N] <text>
+WEALTH (v4)  /net        — net worth + 7d/30d/start deltas
+             /assets · /asset <id> <bal>
+             /debts · /debt <id> <bal>
+             /payoff     — debt payoff projection per liability
+             /goals · /goal <name> $<amt> by <date>
+             /goal fund <name> $<amt>
 
-BRIEFINGS     /briefing /digest /recap /news /calendar /urgent
+INVESTMENTS  /quote <symbol>            — live price (requires FMP_API_KEY)
+(v4)         /portfolio                  — holdings + P&L
+             /buy <sym> <qty> @<price>
+             /sell <sym> <qty> @<price>
 
-REVIEW        /review /skip /progress /execute (existing contact cleanup)
+DECISIONS    /decide <what> :: <why> :: <expected outcome>
+(v4)         /decisions                  — last 10
+
+ANALYSIS     /analyze    — AI monthly financial diagnostic
+
+HABITS       /habits · /habit <name>
+JOURNAL      /journal [mood:N] <text>
+
+BRIEFINGS    /briefing /digest /recap /news /calendar /urgent
+REVIEW       /review /skip /progress /execute
 ```
 
 Plain text → AI conversation with the last 6 turns of memory + full
 context (calendar, emails, news, IRS, todos, habits).
 
-## Data tables (v3)
+## Data tables (v4 — 24 total)
 
-`captures · expenses · spending_limits · bills · bill_reminders_sent ·
-irs_progress · habits · habit_logs · journal · conversation_memory ·
-audit_log · health_checks · cost_log · weather_cache · content_ideas ·
-preferences`
+v3 base (16): captures · expenses · spending_limits · bills ·
+bill_reminders_sent · irs_progress · habits · habit_logs · journal ·
+conversation_memory · audit_log · health_checks · cost_log ·
+weather_cache · content_ideas · preferences
+
+v4 wealth (8): **assets · liabilities · net_worth_snapshots ·
+goal_buckets · holdings · trades · decisions · quote_cache**
 
 RLS enabled on every table (edge functions use service_role so they
 bypass; anon clients are blocked).
@@ -107,6 +137,7 @@ Claude Haiku (primary) / Gemini 2.5 Flash (fallback).
 - `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` / `TELEGRAM_WEBHOOK_SECRPT`
 - `USER_PHONE_NUMBER`
 - `ICLOUD_APP_PASSWORD` — *unset* (optional)
+- `FMP_API_KEY` — *unset* (v4: enables /quote + /portfolio live prices. Free 250/day at financialmodelingprep.com)
 
 ## DST note (Pacific Time — Reno NV)
 
@@ -118,6 +149,7 @@ PT-anchored crons by +1 hour UTC:
 - evening-digest:   `0 4 * * *`  → `0 5 * * *`
 - bill-reminder:    `0 15 * * *` → `0 16 * * *`
 - weekly-review:    `0 2 * * 1`  → `0 3 * * 1`
+- daily-networth:   `0 6 * * *`  → `0 7 * * *`
 
 ## Location
 

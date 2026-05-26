@@ -15,6 +15,8 @@ import { getIrsSnapshot, formatIrsLine, getBillsDueSoon, getSpendingStatus, form
 import { getTodayWeather, formatWeatherLine } from "../_shared/weather.ts";
 import { getAllStreaks, formatHabitsBlock, getRecentCaptures } from "../_shared/capture.ts";
 import { audited, audit, recordHealth } from "../_shared/memory.ts";
+import { netWorthReport, formatNetWorthBlock } from "../_shared/wealth.ts";
+import { dailyBudget, formatDailyBudgetBlock } from "../_shared/forecast.ts";
 
 async function safe<T>(fn: () => Promise<T>, fallback: T): Promise<T> {
   try { return await fn(); } catch (e) { console.error("brief-context-fail:", e); return fallback; }
@@ -23,7 +25,7 @@ async function safe<T>(fn: () => Promise<T>, fallback: T): Promise<T> {
 Deno.serve(async () => {
   const t0 = Date.now();
   try {
-    const [news, events, emails, irs, weather, bills, spending, habits, captures] = await Promise.all([
+    const [news, events, emails, irs, weather, bills, spending, habits, captures, netWorth, budget] = await Promise.all([
       safe(() => getTopNews(5), []),
       safe(() => getUpcomingEvents(24), []),
       safe(() => getTodaysEmails(), []),
@@ -33,6 +35,8 @@ Deno.serve(async () => {
       safe(() => getSpendingStatus(), []),
       safe(() => getAllStreaks(), []),
       safe(() => getRecentCaptures("all", 18), []),
+      safe(() => netWorthReport(), null),
+      safe(() => dailyBudget(), null),
     ]);
 
     const todayStr = new Date().toLocaleDateString("en-US", {
@@ -71,6 +75,8 @@ Deno.serve(async () => {
 
     const habitsBlock = habits.length ? formatHabitsBlock(habits) : "";
     const spendBlock  = spending.length ? formatSpendingBlock(spending) : "";
+    const netWorthBlock = netWorth ? formatNetWorthBlock(netWorth) : "";
+    const cashBlock = budget ? formatDailyBudgetBlock(budget) : "";
 
     const yesterdayCaptures = captures.length
       ? "📥 SINCE YESTERDAY\n" + captures.slice(0, 8).map((c) => `• [${c.kind}] ${c.body.slice(0, 80)}`).join("\n")
@@ -134,6 +140,8 @@ LENGTH: 1600-2200 chars total. Blank lines between sections.`;
       `🦇 ALFRED — ${todayStr.toUpperCase()}`,
       weatherLine,
       irsLine,
+      netWorthBlock,
+      cashBlock,
       billsLine,
       habitsBlock,
       spendBlock,
