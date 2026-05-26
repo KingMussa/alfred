@@ -33,25 +33,35 @@ export interface Quote {
 
 export function marketConfigured(): boolean { return FMP_KEY.length > 0; }
 
-/** Get one quote — cached unless stale. Returns null if FMP not configured. */
+/**
+ * Get one quote. Cached up to CACHE_TTL_MIN. Returns null if FMP unconfigured.
+ *
+ * Uses the new /stable/quote endpoint — the /api/v3/quote/{sym} endpoint was
+ * retired August 31, 2025. Batch endpoint (/stable/batch-quote) is premium-only,
+ * so we parallelize singles for getQuotes() instead.
+ */
 export async function getQuote(symbol: string): Promise<Quote | null> {
   if (!FMP_KEY) return null;
   const sym = symbol.toUpperCase().trim();
   const cached = await readCache(sym);
   if (cached) return cached;
 
-  const r = await fetch(`https://financialmodelingprep.com/api/v3/quote/${sym}?apikey=${FMP_KEY}`);
+  const r = await fetch(`https://financialmodelingprep.com/stable/quote?symbol=${sym}&apikey=${FMP_KEY}`);
   if (!r.ok) {
     console.error(`FMP quote ${sym} failed: ${r.status}`);
     return null;
   }
-  const data = (await r.json()) as Array<Record<string, unknown>>;
+  const data = (await r.json()) as Array<Record<string, unknown>> | { "Error Message"?: string };
+  if (!Array.isArray(data)) {
+    console.error(`FMP quote ${sym} error:`, (data as { "Error Message"?: string })["Error Message"]);
+    return null;
+  }
   if (!data.length) return null;
   const q = data[0];
   const quote: Quote = {
     symbol: sym,
     price: Number(q.price),
-    changePct: Number(q.changesPercentage),
+    changePct: Number(q.changePercentage ?? q.changesPercentage),
     name: q.name as string,
     exchange: q.exchange as string,
     open: Number(q.open),
@@ -67,35 +77,29 @@ export async function getQuote(symbol: string): Promise<Quote | null> {
   return quote;
 }
 
-/** Batch quote for a list of symbols. Cache-aware. */
+/**
+ * Batch quote — cache-aware. Free tier doesn't support batch endpoint so we
+ * fan out single requests in parallel. Anything cached within TTL skips network.
+ */
 export async function getQuotes(symbols: string[]): Promise<Map<string, Quote>> {
   if (!FMP_KEY) return new Map();
   const out = new Map<string, Quote>();
   const uniq = [...new Set(symbols.map((s) => s.toUpperCase().trim()))];
+
+  // Pull what's cached first
   const needFetch: string[] = [];
   for (const s of uniq) {
     const c = await readCache(s);
     if (c) out.set(s, c);
     else needFetch.push(s);
   }
+
+  // Parallel singles for the rest — FMP free tier doesn't allow batch endpoint
   if (needFetch.length) {
-    const joined = needFetch.join(",");
-    const r = await fetch(`https://financialmodelingprep.com/api/v3/quote/${joined}?apikey=${FMP_KEY}`);
-    if (r.ok) {
-      const data = (await r.json()) as Array<Record<string, unknown>>;
-      for (const q of data) {
-        const sym = String(q.symbol).toUpperCase();
-        const quote: Quote = {
-          symbol: sym,
-          price: Number(q.price),
-          changePct: Number(q.changesPercentage),
-          name: q.name as string,
-          exchange: q.exchange as string,
-        };
-        out.set(sym, quote);
-        await writeCache(quote);
-      }
-    }
+    const fetched = await Promise.all(needFetch.map((s) => getQuote(s)));
+    fetched.forEach((q, i) => {
+      if (q) out.set(needFetch[i], q);
+    });
   }
   return out;
 }
