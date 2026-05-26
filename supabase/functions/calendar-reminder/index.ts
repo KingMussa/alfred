@@ -18,7 +18,7 @@ Deno.serve(async () => {
           const t = event.start.toLocaleTimeString("en-US", {
             hour: "numeric",
             minute: "2-digit",
-            timeZone: "America/New_York",
+            timeZone: "America/Los_Angeles",
           });
           const msg = `REMINDER: "${event.title}" in 1 hour at ${t}${event.location ? `\nLocation: ${event.location}` : ""}`;
           await notify(msg);
@@ -33,7 +33,7 @@ Deno.serve(async () => {
           const t = event.start.toLocaleTimeString("en-US", {
             hour: "numeric",
             minute: "2-digit",
-            timeZone: "America/New_York",
+            timeZone: "America/Los_Angeles",
           });
           const msg = `HEADS UP: "${event.title}" in 15 min at ${t}${event.location ? `\nLocation: ${event.location}` : ""}`;
           await notify(msg);

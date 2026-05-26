@@ -8,9 +8,10 @@
 const URL = Deno.env.get("SUPABASE_URL")!;
 const KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
-// NYC default. If Dave changes home_zip we could geocode — KISS for now.
-const LAT = 40.7128;
-const LON = -74.006;
+// Reno, NV — Dave's home. Confirmed 2026-05-26.
+// If he ever moves, change here or add geocoding via preferences.home_zip.
+const LAT = 39.5296;
+const LON = -119.8138;
 
 export interface WeatherToday {
   tempHigh: number;
@@ -68,7 +69,7 @@ export async function getTodayWeather(): Promise<WeatherToday> {
     `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}` +
     `&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max,precipitation_sum,sunrise,sunset,weather_code,wind_speed_10m_max` +
     `&current=temperature_2m,apparent_temperature,weather_code,wind_speed_10m` +
-    `&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=mm&timezone=America%2FNew_York`;
+    `&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=mm&timezone=America%2FLos_Angeles`;
 
   const r = await fetch(endpoint);
   if (!r.ok) throw new Error(`open-meteo ${r.status}`);

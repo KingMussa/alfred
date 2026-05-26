@@ -29,18 +29,18 @@ Deno.serve(async () => {
       safe(() => getUpcomingEvents(36), []),
     ]);
 
-    const todayStr = new Date().toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric", timeZone: "America/New_York" });
+    const todayStr = new Date().toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric", timeZone: "America/Los_Angeles" });
 
     // Pull just tomorrow's events (skip today's that already passed)
     const tomorrowEvents = tomorrow.filter((e) => {
-      const ed = e.start.toLocaleDateString("en-US", { timeZone: "America/New_York" });
-      const td = new Date(Date.now() + 86_400_000).toLocaleDateString("en-US", { timeZone: "America/New_York" });
+      const ed = e.start.toLocaleDateString("en-US", { timeZone: "America/Los_Angeles" });
+      const td = new Date(Date.now() + 86_400_000).toLocaleDateString("en-US", { timeZone: "America/Los_Angeles" });
       return ed === td;
     });
 
     const todayCaps = captures.filter((c) => {
-      const cDate = new Date(c.created_at).toLocaleDateString("en-US", { timeZone: "America/New_York" });
-      const tDate = new Date().toLocaleDateString("en-US", { timeZone: "America/New_York" });
+      const cDate = new Date(c.created_at).toLocaleDateString("en-US", { timeZone: "America/Los_Angeles" });
+      const tDate = new Date().toLocaleDateString("en-US", { timeZone: "America/Los_Angeles" });
       return cDate === tDate;
     });
 
@@ -59,7 +59,7 @@ Deno.serve(async () => {
 
     const tomorrowBlock = tomorrowEvents.length
       ? "🌅 TOMORROW\n" + tomorrowEvents.map((e) => {
-          const t = e.start.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/New_York" });
+          const t = e.start.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/Los_Angeles" });
           return `• ${t} — ${e.title}${e.location ? ` @ ${e.location}` : ""}`;
         }).join("\n")
       : "🌅 TOMORROW: clear calendar — make it count.";
@@ -71,7 +71,7 @@ Deno.serve(async () => {
     // ── AI narrative: short, reflective, action-oriented ─────────────────────
     const prompt = `You are Alfred, Dave's butler. Write a SHORT evening digest for ${todayStr} (9 PM).
 
-DAVE: NYC steamfitter, IRS payoff focus (currently $${irs?.balance ?? "?"} left, ${irs?.daysToTarget ?? "?"} days to Feb 2027 target). @dadailydougie content brand.
+DAVE: Reno NV union pipefitter (13yr + 4yr supervision). DIVORCED, one daughter age 6, single income. #1 priority: IRS payoff (currently $${irs?.balance ?? "?"} left, ${irs?.daysToTarget ?? "?"} days to Feb 2027 target). Background tracks: CAD transition, Sunrun solar D2D, @dadailydougie content. Real creative lane: battle rap / freestyles / poetry / drones / tech comedy. ENFP, lone-wolf, strategic.
 
 TODAY:
 - Captures: ${captureCount} (${winsToday} wins, ${ideasToday} ideas, ${todoDoneToday} todos done)
@@ -84,7 +84,7 @@ WRITE EXACTLY THESE SECTIONS (plain text, blank lines between, no markdown):
 2-3 sentences. Reflect on today's energy — productive? distracted? Acknowledge any wins captured. If light day, encourage rest. Tradesman tone.
 
 🎯 TOMORROW'S #1
-ONE thing Dave should do tomorrow. Tied to IRS, content, or website. Specific and short.
+ONE thing Dave should do tomorrow. Default-anchor to IRS payoff progress unless something urgent is on calendar. Could also be a CAD portfolio piece, Sunrun door work, or content post. Specific and short.
 
 ✍️ JOURNAL PROMPT
 ONE question for Dave to reflect on. Make it pointed — "What's the one thing you avoided today?" / "Where did money slip?" / "Best moment today?" Vary it. He can reply with /journal <answer> to save it.

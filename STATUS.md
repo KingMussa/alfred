@@ -9,13 +9,13 @@ Supabase project `alfred` (ref `rwhfueaclqcunnoraaix`, us-east-1).
 
 | Capability | Triggered by | Notes |
 |---|---|---|
-| **Morning briefing** | Cron 10:00 UTC (6 AM ET) | Weather + IRS countdown + bills due + habit streaks + yesterday's captures + AI narrative of news/calendar/email |
-| **Evening digest** | Cron 01:00 UTC (9 PM ET) | Today's captures, open todos, habit check, tomorrow's calendar, journal prompt |
-| **Email recap** | Cron 22:00 UTC (6 PM ET) | Urgent emails ≥8/10 from last 12h |
+| **Morning briefing** | Cron 12:00 UTC (5 AM PT — Reno) | Weather + IRS countdown + bills due + habit streaks + yesterday's captures + AI narrative |
+| **Evening digest** | Cron 04:00 UTC (9 PM PT) | Today's captures, open todos, habit check, tomorrow's calendar, journal prompt |
+| **Email recap** | Cron 01:00 UTC (6 PM PT) | Urgent emails ≥8/10 from last 12h |
 | **Calendar reminders** | Cron */15 min | 1 hr + 15 min before each event |
-| **Bill reminders** | Cron 12:00 UTC (8 AM ET) | 5d/3d/1d/day-of before each active bill |
+| **Bill reminders** | Cron 15:00 UTC (8 AM PT) | 5d/3d/1d/day-of before each active bill |
 | **Health check (dead-man)** | Cron :07 hourly | Verifies each scheduled fn ran on time; alerts Dave if not. Quiet-hours aware. |
-| **Weekly review** | Cron 23:00 UTC Sun (7 PM ET) | Wins, captures, habit streaks, IRS progress, next week's #1 |
+| **Weekly review** | Cron Mon 02:00 UTC (Sun 7 PM PT) | Wins, captures, habit streaks, IRS progress, next week's #1 |
 | **Two-way Telegram** | Webhook (Telegram → edge fn) | Slash commands + free-form chat with rolling 14-day memory |
 
 ## pg_cron jobs
@@ -23,13 +23,13 @@ Supabase project `alfred` (ref `rwhfueaclqcunnoraaix`, us-east-1).
 | jobid | name | schedule (UTC) |
 |---|---|---|
 | 1 | purge-old-emails | `0 3 * * *` |
-| 2 | morning-briefing | `0 10 * * *` |
-| 3 | email-checker | `0 22 * * *` |
+| 2 | morning-briefing | `0 12 * * *` (5 AM PT) |
+| 3 | email-checker | `0 1 * * *` (6 PM PT) |
 | 4 | calendar-reminder | `*/15 * * * *` |
-| 6 | evening-digest | `0 1 * * *` |
-| 7 | bill-reminder | `0 12 * * *` |
-| 8 | health-check | `7 * * * *` |
-| 9 | weekly-review | `0 23 * * 0` |
+| 6 | evening-digest | `0 4 * * *` (9 PM PT) |
+| 7 | bill-reminder | `0 15 * * *` (8 AM PT) |
+| 8 | health-check | `7 * * * *` (hourly) |
+| 9 | weekly-review | `0 2 * * 1` (Sun 7 PM PT) |
 | 10 | purge-conversation | `30 3 * * *` |
 | 11 | purge-telemetry | `45 3 * * 0` |
 
@@ -89,7 +89,7 @@ bypass; anon clients are blocked).
 - **Habits** (5): No ATM cash, Post @dadailydougie, Workout,
   No casino, Sleep 7+ hrs
 - **IRS**: $25,000 balance, $7,000 paid (initial seed)
-- **Quiet hours**: 22:00 → 06:30 ET (no alerts in this window)
+- **Quiet hours**: 22:00 → 06:30 PT (no alerts in this window)
 
 ## Stack
 
@@ -101,23 +101,29 @@ Claude Haiku (primary) / Gemini 2.5 Flash (fallback).
 ## Secrets set
 
 - `GEMINI_API_KEY` · `ANTHROPIC_API_KEY` (optional)
-- `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `GOOGLE_REFRESH_TOKEN`
+- `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRPT` / `GOOGLE_REFRESH_TOKEN`
 - `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` / `TWILIO_FROM_NUMBER`
 - `FROM_EMAIL` / `USER_CELL_GATEWAY` (Gmail→SMS path)
-- `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` / `TELEGRAM_WEBHOOK_SECRET`
+- `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` / `TELEGRAM_WEBHOOK_SECRPT`
 - `USER_PHONE_NUMBER`
 - `ICLOUD_APP_PASSWORD` — *unset* (optional)
 
-## DST note
+## DST note (Pacific Time — Reno NV)
 
-Cron schedules are in UTC tuned for EDT (UTC-4). On **2026-11-01**
-when clocks fall back to EST (UTC-5), shift ALL ET-anchored crons by
-+1 hour:
-- morning-briefing: `0 10 * * *` → `0 11 * * *`
-- email-checker:    `0 22 * * *` → `0 23 * * *`
-- evening-digest:   `0 1 * * *`  → `0 2 * * *`
-- bill-reminder:    `0 12 * * *` → `0 13 * * *`
-- weekly-review:    `0 23 * * 0` → `0 0 * * 1`
+Cron schedules are tuned for **PDT (UTC-7)** as of 2026-05-26. On
+**2026-11-01** when clocks fall back to **PST (UTC-8)**, shift ALL
+PT-anchored crons by +1 hour UTC:
+- morning-briefing: `0 12 * * *` → `0 13 * * *`
+- email-checker:    `0 1 * * *`  → `0 2 * * *`
+- evening-digest:   `0 4 * * *`  → `0 5 * * *`
+- bill-reminder:    `0 15 * * *` → `0 16 * * *`
+- weekly-review:    `0 2 * * 1`  → `0 3 * * 1`
+
+## Location
+
+Dave is in **Reno, Nevada**. Weather coords in `_shared/weather.ts`:
+39.5296, -119.8138. All formatting uses `America/Los_Angeles` timezone.
+Previously stored as NYC — corrected from the 2026-05-26 ChatGPT handoff.
 
 ## Known advisories (informational)
 

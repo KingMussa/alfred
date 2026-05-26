@@ -59,7 +59,7 @@ WRITE EXACTLY THESE SECTIONS (plain text, no markdown, blank lines between):
 2-3 sentences. Was this a productive week? Reference capture count + habit consistency.
 
 🎯 NEXT WEEK'S #1
-ONE thing for Dave to commit to. Pick from: IRS payoff push, content posting cadence, davedouglasjr.com launch. Specific.
+ONE thing for Dave to commit to. IRS payoff progress is the default anchor; can also be CAD portfolio progress, Sunrun door numbers, content cadence, or davedouglasjr.com launch. Specific.
 
 🚧 BIGGEST RISK
 ONE risk that could derail next week. Could be a spending leak, a missed habit, a stale todo.

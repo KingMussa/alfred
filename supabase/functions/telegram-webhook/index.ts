@@ -326,12 +326,12 @@ async function cmdQuiet(arg: string): Promise<string> {
   }
   // Accept "22:00-06:30" or "off"
   if (arg.trim().toLowerCase() === "off") {
-    await setPref("quiet_hours", { start: "00:00", end: "00:00", tz: "America/New_York" });
+    await setPref("quiet_hours", { start: "00:00", end: "00:00", tz: "America/Los_Angeles" });
     return "🤫 Quiet hours disabled.";
   }
   const m = arg.match(/(\d{1,2}:\d{2})\s*[-→]\s*(\d{1,2}:\d{2})/);
   if (!m) return "Usage: /quiet 22:00-06:30  or  /quiet off";
-  await setPref("quiet_hours", { start: m[1], end: m[2], tz: "America/New_York" });
+  await setPref("quiet_hours", { start: m[1], end: m[2], tz: "America/Los_Angeles" });
   return `🤫 Quiet hours set ${m[1]} – ${m[2]} ET.`;
 }
 
@@ -381,7 +381,7 @@ async function cmdStatus(): Promise<string> {
   const counts = await getPendingCounts().catch(() => ({ total_pending: "?" }));
   return [
     "📊 ALFRED STATUS",
-    `Now: ${new Date().toLocaleString("en-US", { timeZone: "America/New_York" })} ET`,
+    `Now: ${new Date().toLocaleString("en-US", { timeZone: "America/Los_Angeles" })} ET`,
     `Version: ${VERSION}`,
     "",
     irs ? formatIrsLine(irs) : "",
@@ -424,7 +424,7 @@ async function cmdCalendar(): Promise<string> {
     const events = await getUpcomingEvents(24);
     if (!events.length) return "📅 Clear for the next 24 hours.";
     return ["📅 NEXT 24 HOURS", "", ...events.map(e => {
-      const t = e.start.toLocaleString("en-US", { weekday:"short", hour:"numeric", minute:"2-digit", timeZone:"America/New_York" });
+      const t = e.start.toLocaleString("en-US", { weekday:"short", hour:"numeric", minute:"2-digit", timeZone:"America/Los_Angeles" });
       return `• ${t} — ${e.title}${e.location ? ` @ ${e.location}` : ""}`;
     })].join("\n");
   } catch (e) { return `📅 Calendar fetch failed: ${e}`; }
@@ -536,7 +536,7 @@ async function cmdExecute(): Promise<string> {
 // Natural language → AI with conversation memory + full context
 // ─────────────────────────────────────────────────────────────────────────────
 async function naturalLanguage(message: string): Promise<string> {
-  const now = new Date().toLocaleString("en-US", { timeZone: "America/New_York" });
+  const now = new Date().toLocaleString("en-US", { timeZone: "America/Los_Angeles" });
 
   const [events, emails, news, irs, history, todos, habits] = await Promise.all([
     safeCall(() => getUpcomingEvents(48), []),
@@ -549,7 +549,7 @@ async function naturalLanguage(message: string): Promise<string> {
   ]);
 
   const calBlock = events.length
-    ? events.map(e => `${e.start.toLocaleString("en-US",{weekday:"short",hour:"numeric",minute:"2-digit",timeZone:"America/New_York"})} — ${e.title}`).join("\n")
+    ? events.map(e => `${e.start.toLocaleString("en-US",{weekday:"short",hour:"numeric",minute:"2-digit",timeZone:"America/Los_Angeles"})} — ${e.title}`).join("\n")
     : "(nothing in next 48h)";
   const emailBlock = emails.length
     ? emails.slice(0,10).map(e => `${e.sender.split("<")[0].trim()}: ${e.subject}`).join("\n")
@@ -566,7 +566,7 @@ async function naturalLanguage(message: string): Promise<string> {
 DAVE just texted you:
 "${message}"
 
-DAVE: 15-year NYC journeyman steamfitter. Building @dadailydougie trades brand. Paying $32k IRS debt (target Feb 2027). davedouglasjr.com pending. Bold, direct tradesman style. He calls himself Batman and his laptop the Batcave — Alfred can lean into Pennyworth voice occasionally ("Master Wayne", "Sir"), but only sparingly. Mostly just be a sharp, direct assistant.
+DAVE: Reno NV union pipefitter / steamfitter (13yr + 4yr supervision, home book Steamfitters Local 638 NYC, traveling card UA Local 350 Reno, AutoCAD/Revit/BIM certs). DIVORCED, one daughter age 6, single-income household — every dollar matters more. #1 priority: pay off $32k IRS debt by Feb 2027. Background tracks: CAD Technician transition (Wilson Engineering type), Sunrun solar D2D side hustle, @dadailydougie trades content brand (long-game), davedouglasjr.com pending. Real creative lane: battle rap, freestyles, poetry, drones, tech comedy — voice + content backbone, pairs with "information guy" persona. Personality: ENFP, Openness 96%, Conscientiousness 29%, strategic + aggressive + lone-wolf risk-taker. He calls himself Batman and his laptop the Batcave — Alfred can lean into Pennyworth voice occasionally ("Master Wayne", "Sir") but sparingly. Mostly: be a sharp, direct, blue-collar assistant. Scripts + bullet lists + step-by-steps land better than paragraphs. Punchlines and wordplay welcome — he studies battle rap.
 
 NOW: ${now} ET
 
