@@ -1,16 +1,38 @@
+// ╔═══════════════════════════════════════════════════════════════════════╗
+// ║ morning-briefing — Alfred's 6/7 AM daily intel drop                  ║
+// ║                                                                       ║
+// ║ Now includes IRS countdown, weather, bills due in 3 days, habit      ║
+// ║ streaks, yesterday's captures, and the day's calendar + news + email. ║
+// ╚═══════════════════════════════════════════════════════════════════════╝
+
 import { notify } from "../_shared/notify.ts";
 import { getTodaysEmails } from "../_shared/gmail.ts";
 import { getUpcomingEvents } from "../_shared/calendar.ts";
 import { getTopNews } from "../_shared/news.ts";
 import { aiChat } from "../_shared/ai.ts";
 import { logSMS } from "../_shared/db.ts";
+import { getIrsSnapshot, formatIrsLine, getBillsDueSoon, getSpendingStatus, formatSpendingBlock } from "../_shared/finance.ts";
+import { getTodayWeather, formatWeatherLine } from "../_shared/weather.ts";
+import { getAllStreaks, formatHabitsBlock, getRecentCaptures } from "../_shared/capture.ts";
+import { audited, audit, recordHealth } from "../_shared/memory.ts";
+
+async function safe<T>(fn: () => Promise<T>, fallback: T): Promise<T> {
+  try { return await fn(); } catch (e) { console.error("brief-context-fail:", e); return fallback; }
+}
 
 Deno.serve(async () => {
+  const t0 = Date.now();
   try {
-    const [news, events, emails] = await Promise.all([
-      getTopNews(5),
-      getUpcomingEvents(24),
-      getTodaysEmails(),
+    const [news, events, emails, irs, weather, bills, spending, habits, captures] = await Promise.all([
+      safe(() => getTopNews(5), []),
+      safe(() => getUpcomingEvents(24), []),
+      safe(() => getTodaysEmails(), []),
+      safe(() => getIrsSnapshot(), null),
+      safe(() => getTodayWeather(), null),
+      safe(() => getBillsDueSoon(7), []),
+      safe(() => getSpendingStatus(), []),
+      safe(() => getAllStreaks(), []),
+      safe(() => getRecentCaptures("all", 18), []),
     ]);
 
     const todayStr = new Date().toLocaleDateString("en-US", {
@@ -25,82 +47,107 @@ Deno.serve(async () => {
       : "No news fetched.";
 
     const eventsBlock = events.length
-      ? events
-          .map((e) => {
-            const t = e.start.toLocaleTimeString("en-US", {
-              hour: "numeric",
-              minute: "2-digit",
-              timeZone: "America/New_York",
-            });
-            return `• ${t} — ${e.title}${e.location ? ` @ ${e.location}` : ""}`;
-          })
-          .join("\n")
+      ? events.map((e) => {
+          const t = e.start.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/New_York" });
+          return `• ${t} — ${e.title}${e.location ? ` @ ${e.location}` : ""}`;
+        }).join("\n")
       : "Nothing on the calendar today.";
 
     const emailBlock = emails.length
-      ? emails
-          .slice(0, 5)
-          .map((e) => `• ${e.sender.split("<")[0].trim()}: ${e.subject}`)
-          .join("\n")
+      ? emails.slice(0, 5).map((e) => `• ${e.sender.split("<")[0].trim()}: ${e.subject}`).join("\n")
       : "No new emails.";
 
-    const prompt = `You are Alfred, Dave Douglas Jr.'s personal AI butler. Write a DETAILED, motivating morning briefing for ${todayStr}.
+    // ── Deterministic data blocks (no AI for these) ──────────────────────────
+    const irsLine     = irs ? formatIrsLine(irs) : "";
+    const weatherLine = weather ? formatWeatherLine(weather) : "";
 
-About Dave (context for personalization — do not list this back to him):
-- 15-year journeyman steamfitter in NYC, HVAC background
-- Building a trades-influencer brand at @dadailydougie (Instagram), goal is bold/satirical jobsite content
-- Paying off ~$32k in IRS debt — target payoff Feb 2027 — every dollar counts
-- Domain davedouglasjr.com registered, single-page site built, hosting confirmation pending
-- Style: bold, dark, no corporate fluff. Trades vibe. Punchy and direct.
+    const billsLine = bills.length
+      ? "📅 BILLS DUE\n" + bills.map(({ bill, daysOut, due }) => {
+          const when = daysOut === 0 ? "TODAY" : daysOut === 1 ? "tomorrow" : `in ${daysOut}d (${due.toLocaleDateString("en-US",{month:"short",day:"numeric"})})`;
+          const prio = bill.priority === 1 ? "🔴 " : "";
+          return `${prio}${bill.name} $${bill.amount} — ${when}`;
+        }).join("\n")
+      : "";
 
-DATA TO DRAFT FROM
-==================
+    const habitsBlock = habits.length ? formatHabitsBlock(habits) : "";
+    const spendBlock  = spending.length ? formatSpendingBlock(spending) : "";
 
-TOP 5 NEWS HEADLINES:
+    const yesterdayCaptures = captures.length
+      ? "📥 SINCE YESTERDAY\n" + captures.slice(0, 8).map((c) => `• [${c.kind}] ${c.body.slice(0, 80)}`).join("\n")
+      : "";
+
+    // ── AI-generated narrative section ───────────────────────────────────────
+    const prompt = `You are Alfred — Dave Douglas Jr.'s personal butler. Write the narrative sections of a morning briefing for ${todayStr}.
+
+ABOUT DAVE (for tone — do not echo back):
+- 15-year NYC journeyman steamfitter, building @dadailydougie trades brand
+- Paying down $32k IRS debt → Feb 2027 (currently $${irs?.balance ?? "?"})
+- Bold, direct, no corporate fluff. Trades voice. Batman vibes (Alfred speaks to him as Master Wayne when fitting).
+
+DATA YOU CAN REFERENCE:
+
+NEWS HEADLINES:
 ${newsBlock}
 
-TODAY'S CALENDAR (next 24h):
+TODAY'S CALENDAR:
 ${eventsBlock}
 
-RECENT EMAILS (last 24h):
+RECENT EMAILS:
 ${emailBlock}
 
-WRITE THE BRIEFING IN THIS STRUCTURE
-====================================
+WEATHER: ${weather ? `${weather.conditions}, ${weather.tempLow}°-${weather.tempHigh}°F, rain ${weather.precipChance}%` : "n/a"}
 
-Use these EXACT section headers (with the emoji), separated by blank lines. Plain text only — no markdown bold/italic, no asterisks. This gets read on a phone screen.
+WRITE EXACTLY THESE SECTIONS (use these exact headers with emoji, blank line between sections, no markdown bold/asterisks — plain text for phone):
 
 ☀️ GOOD MORNING DAVE
-One paragraph, 2-3 sentences. Acknowledge the day (Monday grind vs Friday push vs weekend, etc.), comment on something timely. Be warm but not saccharine. Tradesman tone.
+One paragraph, 2-3 sentences. Acknowledge the day (Monday vs Friday vs weekend energy), tie in weather if relevant. Warm but punchy.
 
 📰 NEWS DIGEST
-For EACH of the 5 headlines, give the headline + ONE sentence of context explaining why it matters or what the implication is. Number them 1-5. Lean harder into NYC, economy, trades/construction, and tech-that-helps-trades stories. If a headline is fluff, give it one short line and move on.
+For each of the 5 headlines, give the headline + ONE sentence of context. Number them 1-5. Lean into NYC, economy, trades/construction, tech-that-helps-trades.
 
 📅 TODAY'S SCHEDULE
-Walk through each calendar event in chronological order: time, what it is, where, and any prep tip if obvious (e.g. "leave 15 min early for traffic" or "bring the change order paperwork"). If the day is light or empty, say so and suggest 1-2 high-value uses of the time tied to Dave's goals (post a reel for @dadailydougie, push the davedouglasjr.com hosting question, etc.).
+Walk through each event chronologically with any prep tips. If day is light, suggest 1-2 high-leverage moves tied to Dave's goals: IRS payoff, @dadailydougie growth, davedouglasjr.com launch.
 
 📩 EMAIL TRIAGE
-Categorize the recent emails into these buckets, only including buckets that have entries:
-  🚨 NEEDS RESPONSE — name + one-line subject summary
-  💰 MONEY/INVOICE — anything financial (invoices owed, IRS notices, payment confirmations)
-  📩 OPPORTUNITY — leads, brand deals, gigs, jobs
-  🗑️ NOISE — count only, e.g. "12 promos/newsletters — ignore"
+Categorize recent emails — only include buckets with entries:
+  🚨 NEEDS RESPONSE — name + one-line summary
+  💰 MONEY/INVOICE
+  📩 OPPORTUNITY — leads/brand deals/gigs
+  🗑️ NOISE — count only
 
 🎯 TODAY'S MOVE
-Pick ONE thing — the single highest-leverage action Dave should focus on today. Tie it explicitly to either IRS payoff progress, influencer growth, or the website launch. Be decisive. 2-3 sentences.
+ONE highest-leverage action. Tied to IRS payoff OR influencer growth OR website launch. Decisive. 2-3 sentences.
 
 🔧 CLOSER
-One short line. Trade-flavored, no corporate cheese. Examples: "Tools sharp, head up. Let's go." / "Pipe don't lay itself. Move." / "Friday money's the best money." Vary it.
+One short trade-flavored line. Vary it. Examples: "Tools sharp, head up." / "Pipe don't lay itself." / "Friday money's the best money."
 
-LENGTH: Aim for 1800-2400 characters total. Use blank lines between sections so it scans well on phone.`;
+LENGTH: 1600-2200 chars total. Blank lines between sections.`;
 
-    const briefing = await aiChat(prompt, 2000);
+    const narrative = await aiChat(prompt, 2000);
+
+    // ── Stitch deterministic blocks on top of the narrative ─────────────────
+    const headerBlocks = [
+      `🦇 ALFRED — ${todayStr.toUpperCase()}`,
+      weatherLine,
+      irsLine,
+      billsLine,
+      habitsBlock,
+      spendBlock,
+      yesterdayCaptures,
+    ].filter(Boolean).join("\n\n");
+
+    const briefing = `${headerBlocks}\n\n${"─".repeat(28)}\n\n${narrative}`;
+
     await notify(briefing);
     await logSMS(briefing, "morning_briefing");
+    await audit({ function_name: "morning-briefing", action: "delivered", duration_ms: Date.now() - t0, details: { length: briefing.length } });
+    await recordHealth("morning-briefing", true);
 
-    return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    return new Response(JSON.stringify({ ok: true, length: briefing.length }), { status: 200 });
   } catch (e) {
     console.error("morning-briefing error:", e);
+    await recordHealth("morning-briefing", false, String(e));
+    await audit({ function_name: "morning-briefing", action: "failed", status: "error", details: { error: String(e) } });
     return new Response(JSON.stringify({ error: String(e) }), { status: 500 });
   }
 });

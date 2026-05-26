@@ -2,6 +2,7 @@ import { getNewEmails } from "../_shared/gmail.ts";
 import { aiChat } from "../_shared/ai.ts";
 import { notify } from "../_shared/notify.ts";
 import { hasProcessedEmail, markEmailProcessed, logSMS } from "../_shared/db.ts";
+import { audit, recordHealth } from "../_shared/memory.ts";
 
 /**
  * Evening urgent-email recap.
@@ -15,6 +16,7 @@ import { hasProcessedEmail, markEmailProcessed, logSMS } from "../_shared/db.ts"
  * on 2026-05-23 at Dave's request — less buzzing during the workday.
  */
 Deno.serve(async () => {
+  const t0 = Date.now();
   try {
     // 12-hour window — covers the workday since the 6 AM briefing
     const emails = await getNewEmails(60 * 12);
@@ -59,12 +61,16 @@ Scale:
       await logSMS(msg, "email_alert");
     }
 
+    await audit({ function_name: "email-checker", action: "scan-complete", details: { checked: emails.length, alerted: alerts.length }, duration_ms: Date.now() - t0 });
+    await recordHealth("email-checker", true);
     return new Response(
       JSON.stringify({ checked: emails.length, alerted: alerts.length }),
       { status: 200 },
     );
   } catch (e) {
     console.error("email-checker error:", e);
+    await recordHealth("email-checker", false, String(e));
+    await audit({ function_name: "email-checker", action: "failed", status: "error", details: { error: String(e) }, duration_ms: Date.now() - t0 });
     return new Response(JSON.stringify({ error: String(e) }), { status: 500 });
   }
 });

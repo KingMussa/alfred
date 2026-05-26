@@ -1,6 +1,7 @@
 import { getUpcomingEvents } from "../_shared/calendar.ts";
 import { notify } from "../_shared/notify.ts";
 import { hasReminderBeenSent, markReminderSent, logSMS } from "../_shared/db.ts";
+import { audit, recordHealth } from "../_shared/memory.ts";
 
 Deno.serve(async () => {
   try {
@@ -43,11 +44,18 @@ Deno.serve(async () => {
       }
     }
 
+    // Only audit when we actually did something — otherwise calendar-reminder spams audit_log every 15min
+    if (sent > 0) {
+      await audit({ function_name: "calendar-reminder", action: "reminders-sent", details: { events: events.length, sent } });
+    }
+    await recordHealth("calendar-reminder", true, `${sent} sent, ${events.length} events`);
     return new Response(JSON.stringify({ eventsChecked: events.length, remindersSent: sent }), {
       status: 200,
     });
   } catch (e) {
     console.error("calendar-reminder error:", e);
+    await recordHealth("calendar-reminder", false, String(e));
+    await audit({ function_name: "calendar-reminder", action: "failed", status: "error", details: { error: String(e) } });
     return new Response(JSON.stringify({ error: String(e) }), { status: 500 });
   }
 });
