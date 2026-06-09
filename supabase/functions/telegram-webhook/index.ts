@@ -1248,6 +1248,10 @@ async function handlePhoto(photos: TelegramPhotoSize[], caption?: string): Promi
       await sbPatch(`/documents?id=eq.${docId.id}`, { storage_path: path });
     } catch (e) {
       console.error("storage archive failed (non-fatal):", e);
+      await audit({
+        function_name: "telegram-webhook", action: "storage-archive-failed", status: "error",
+        details: { error: String(e).slice(0, 400), doc_id: docId.id },
+      });
     }
 
     const confBar = "█".repeat(Math.round(classified.confidence * 5)) + "░".repeat(5 - Math.round(classified.confidence * 5));

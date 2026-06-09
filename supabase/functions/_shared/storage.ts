@@ -19,7 +19,7 @@ export function extForMime(mime: string): string {
 export async function uploadDoc(path: string, bytes: Uint8Array, contentType: string): Promise<string> {
   const res = await fetch(`${URL}/storage/v1/object/${BUCKET}/${path}`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${KEY}`, "Content-Type": contentType, "x-upsert": "true" },
+    headers: { apikey: KEY, Authorization: `Bearer ${KEY}`, "Content-Type": contentType, "x-upsert": "true" },
     body: bytes,
   });
   if (!res.ok) throw new Error(`storage upload ${res.status}: ${(await res.text()).slice(0, 200)}`);
@@ -30,7 +30,7 @@ export async function uploadDoc(path: string, bytes: Uint8Array, contentType: st
 export async function signedUrl(path: string, expiresSec = 3600): Promise<string> {
   const res = await fetch(`${URL}/storage/v1/object/sign/${BUCKET}/${path}`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${KEY}`, "Content-Type": "application/json" },
+    headers: { apikey: KEY, Authorization: `Bearer ${KEY}`, "Content-Type": "application/json" },
     body: JSON.stringify({ expiresIn: expiresSec }),
   });
   if (!res.ok) throw new Error(`storage sign ${res.status}: ${(await res.text()).slice(0, 200)}`);
