@@ -1,7 +1,23 @@
 # Alfred — Status
 
-**Version: v4-wealth  · Last upgrade: 2026-05-26**
+**Version: v6-field-capture  · Last upgrade: 2026-06-09**
 **Live since: 2026-05-23**
+
+## v6 (2026-06-09) — Field capture: voice notes + VRF blueprint reading
+- **Voice notes** — tap-and-hold the mic in Telegram → Gemini 2.5 Flash transcription → routed through the *same* command router as typed text. Spoken intent words ("todo …", "note …", "spent …") map to the matching slash command; the reply echoes the transcript so Dave can trust it. New `_shared/voice.ts`; no new secret (reuses `GEMINI_API_KEY`).
+- **VRF blueprint reader** — snap/send a refrigerant piping print → structured extraction tuned to Dave's trade: RL/RG line size + BOI elevation per run, indoor-unit tags + AFF, BC controllers / CMY branch joints, UP/DN risers, red-pen hanger markups, handwritten field notes. `/blueprints` (or `/bp`) lists recent. Stored in the existing `documents` table (`doc_type='blueprint'`) — **no migration**.
+- **Blueprints read via Claude Opus 4.8 vision** (not Gemini) for jobsite-grade accuracy — gated to blueprints only by `readDocument()`; receipts/statements stay on free Gemini. Falls back to Gemini if Claude errors. Best capture: send as a **FILE** (full-res), shot flat + lit, one area at a time.
+- **Engine fix** (`_shared/ai.ts`) — real Claude→Gemini fallback (was dead — `claudeChat` threw and never fell through) and retries `{429,500,529}` (was the dead `529||529`).
+- Deployed to **`telegram-webhook`** (live, smoke-tested 403/405). The 4 cron fns (morning-briefing, evening-digest, email-checker, weekly-review) still need a redeploy to pick up the `ai.ts` fallback fix.
+- Commits authored as **BATCAVE <bklyncaviar@gmail.com>**, pushed to `KingMussa/alfred`.
+
+## v5 (2026-06-09) — Pay Dashboard V5 + car note payoff
+- 🎉 **Capital One Auto Loan PAID IN FULL (2026-06-09)** — liability #2 zeroed & deactivated, $617/mo bill deactivated. Insurance ($477/mo, due 10th) still active — shop it next.
+- **IRS corrected to EXACT transcript amounts (same day)**: 2023 $6,465.59 · 2024 $23,166.91 · 2025 $3,035.36 = **$32,667.86** (was $25k estimate). `~/Documents/alfred_irs_balance.txt` updated — Tuesday brief picks it up automatically.
+- **Net worth**: −$14,218 → **−$6,886** (+$7,332 net: car −$15k debt, IRS +$7.7k correction). Payoff at $3k/mo lands ~May 2027; routing the freed $617/mo to IRS (~$3.6k/mo) pulls it back toward Feb 2027.
+- New **Money Mission Control** Cowork artifact (`money-mission-control`) — persisted dashboard with live Supabase refresh: net worth trend, debt demolition, goal buckets, spending caps + breakdown, ACCO work-pay section (V5), and document drop-in module wired to the alfred_inbox image pipeline
+- Remaining debt: IRS $25,000 only · freedom date Feb 2027 unchanged
+- Freed $617/mo → candidate seed for Emergency Fund (could start Phase 2 ~8 months early)
 
 ## v4 (2026-05-26) — Wealth modeling + investments + decisions
 - Net worth tracker (8 assets, 2 liabilities seeded → current NW $−14,218)
