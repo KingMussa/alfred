@@ -10,7 +10,12 @@
 const URL = Deno.env.get("SUPABASE_URL")!;
 const KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const GEMINI_KEY = Deno.env.get("GEMINI_API_KEY")!;
+const ANTHROPIC_KEY = Deno.env.get("ANTHROPIC_API_KEY"); // optional — enables high-quality blueprint reads
 const BOT_TOKEN = Deno.env.get("TELEGRAM_BOT_TOKEN")!;
+
+// Blueprints are dense and high-stakes — read them with Claude (Opus) instead of
+// free Gemini when the key is present. Gated to blueprints only to control cost.
+const CLAUDE_VISION_MODEL = "claude-opus-4-8";
 
 const H = { Authorization: `Bearer ${KEY}`, apikey: KEY, "Content-Type": "application/json" };
 
@@ -48,6 +53,7 @@ export type DocType =
   | "bill_invoice"
   | "check"
   | "id_document"
+  | "blueprint"
   | "other";
 
 export interface ClassifiedDoc {
@@ -63,7 +69,7 @@ const CLASSIFICATION_PROMPT = `You are Alfred's vision classifier. Look at this 
 Return ONLY valid JSON. No prose, no markdown. The shape:
 
 {
-  "doc_type": "<one of: receipt | bank_statement | credit_card_statement | paystub | irs_letter | bill_invoice | check | id_document | other>",
+  "doc_type": "<one of: receipt | bank_statement | credit_card_statement | paystub | irs_letter | bill_invoice | check | id_document | blueprint | other>",
   "confidence": <0..1>,
   "summary": "<one-line plain-English summary, e.g. 'Walmart grocery receipt $47.23 dated 2026-05-26'>",
   "data": { <fields specific to doc_type — see below> }
@@ -123,10 +129,27 @@ id_document:
     "redacted": true,
     "note": "We do NOT extract full PII — just acknowledge the document type." }
 
+blueprint (a VRF refrigerant piping coordination drawing — Mitsubishi/Daikin City-Multi style. RL = refrigerant liquid line, RG = refrigerant gas line; BOI = bottom-of-insulation elevation; AFF = above finished floor; BC = branch controller; VRF/VCU/HPCU/HPAH = units; UP/DN = riser; TYP-n = repeats n times):
+  { "sheet_number": "M-501", "title": "Level 3 VRF Piping Plan",
+    "discipline": "mechanical / VRF refrigerant",
+    "revision": "3", "scale": "1/4 in = 1 ft",
+    "system": "Mitsubishi City Multi R2 (heat recovery) or similar",
+    "grids": ["24","25","Column E"],
+    "indoor_units":  [ { "tag": "VRF-46 1122-1", "type": "cassette | ducted | air handler", "aff": "8 ft 0 in" } ],
+    "controllers":   [ { "tag": "BC-46", "type": "BC controller | CMY-Y202S-G2 branch joint", "aff": "13 ft 0 in" } ],
+    "refrigerant_lines": [ { "kind": "RL | RG", "size": "3/8 in", "boi": "17 ft 10 3/4 in", "note": "TYP-2 | to VRF-39-1125-1" } ],
+    "risers":      [ "UP TO VCU-46", "UP TO HPCU-01" ],
+    "hangers":     [ "red field markups, e.g. 'Add Hanger near Column E', 'Center Hanger'" ],
+    "dimensions":  [ "locating dims, e.g. '12 ft 0 5/8 in'" ],
+    "field_notes": [ "handwritten markups, e.g. '3W 18-7 TOP / 18-0 BTM'" ],
+    "ambiguities": [ "anything unreadable, cut off, or glare-washed" ] }
+
 other:
   { "best_guess": "...", "key_text": "first 200 chars of text visible" }
 
 If you can't read fields clearly, use null. If the image is blurry/unreadable, set doc_type=other with confidence < 0.3.
+
+For blueprint: it's usually a phone photo of a much larger VRF sheet, so text may be small or partly cut off. Read every RL/RG line with its size + BOI, and every unit tag with its AFF. Use empty arrays [] for sections that aren't visible — never invent sizes, counts, or elevations. Put anything unreadable in "ambiguities". Still set doc_type=blueprint when it's clearly a piping/refrigerant drawing, even if you can only read the title block.
 
 Output ONLY the JSON.`;
 
@@ -185,6 +208,126 @@ export async function classifyAndExtract(
   return parsed;
 }
 
+// ── 2b. High-quality blueprint read via Claude vision (Opus) ─────────────────
+// VRF refrigerant sheets are dense and the callouts (RL/RG sizes, BOI elevations)
+// are what a fitter actually needs. Gemini Flash misses too much on a wavy phone
+// shot, so blueprints get read by Claude when ANTHROPIC_API_KEY is set.
+
+const VRF_BLUEPRINT_PROMPT =
+`You are a senior MEP detailer reading a VRF refrigerant piping coordination drawing
+(Mitsubishi/Daikin City-Multi style), usually a jobsite phone photo of part of a larger sheet.
+
+Decode this trade language:
+- RL = refrigerant LIQUID line, RG = refrigerant GAS line (sizes like 1/4", 3/8", 1/2", 5/8", 7/8", 1 1/8")
+- BOI = Bottom Of Insulation elevation (install height of the bottom of the insulated line)
+- AFF = Above Finished Floor (unit mounting height)
+- BC = Branch Controller; CMY-Y... = Mitsubishi branch / Y-joint
+- VRF / VCU / HPCU / HPAH = indoor units, condensing units, heat-pump air handler
+- "UP TO X" / UP-DN circles = risers up/down to a unit on another level
+- TYP-n = the callout repeats at n identical locations
+- purple bundles = the line-sets running together; numbers in circles / "Column E" = grid refs
+- red text/arrows + "Add Hanger" / "Center Hanger" = field markups for pipe supports
+
+Extract EVERYTHING you can read into this exact JSON shape (no prose, no markdown fences):
+
+{ "confidence": <0..1>,
+  "summary": "<one line, e.g. 'L3 VRF plan grids 24-25, BC-46/47 feeding cassettes 7-8ft AFF'>",
+  "data": {
+    "sheet_number": null, "title": null, "discipline": "VRF refrigerant",
+    "revision": null, "scale": null, "system": null,
+    "grids": [],
+    "indoor_units":      [ { "tag": "", "type": "", "aff": "" } ],
+    "controllers":       [ { "tag": "", "type": "", "aff": "" } ],
+    "refrigerant_lines": [ { "kind": "RL|RG", "size": "", "boi": "", "note": "" } ],
+    "risers": [], "hangers": [], "dimensions": [], "field_notes": [], "ambiguities": []
+  } }
+
+Rules: read every RL/RG line with its size and BOI. Capture every unit tag with its AFF.
+Record red-pen hanger markups under "hangers" and any handwriting under "field_notes".
+Use empty arrays / null where you genuinely can't read it — NEVER invent sizes, counts, or
+elevations. Put glare / cutoff / unreadable spots in "ambiguities". Output ONLY the JSON object.`;
+
+// btoa(String.fromCharCode(...bytes)) overflows the call stack on multi-MB photos;
+// encode in 32 KB chunks.
+function toB64(bytes: Uint8Array): string {
+  let s = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) s += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  return btoa(s);
+}
+
+function parseJsonLoose(text: string): { confidence?: number; summary?: string; data?: Record<string, unknown> } {
+  let t = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+  const first = t.indexOf("{");
+  const last = t.lastIndexOf("}");
+  if (first >= 0 && last > first) t = t.slice(first, last + 1);
+  return JSON.parse(t);
+}
+
+async function extractBlueprintWithClaude(bytes: Uint8Array, mime: string, caption?: string): Promise<ClassifiedDoc> {
+  if (!ANTHROPIC_KEY) throw new Error("no ANTHROPIC_API_KEY");
+  const media = ["image/jpeg", "image/png", "image/gif", "image/webp"].includes(mime) ? mime : "image/jpeg";
+  const captionLine = caption ? `\n\nField caption from the fitter: "${caption}"` : "";
+
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "x-api-key":         ANTHROPIC_KEY,
+      "anthropic-version": "2023-06-01",
+      "content-type":      "application/json",
+    },
+    body: JSON.stringify({
+      model:      CLAUDE_VISION_MODEL,
+      max_tokens: 8000,
+      thinking:      { type: "adaptive" },
+      output_config: { effort: "high" },
+      messages: [{
+        role: "user",
+        content: [
+          { type: "text", text: VRF_BLUEPRINT_PROMPT + captionLine },
+          { type: "image", source: { type: "base64", media_type: media, data: toB64(bytes) } },
+        ],
+      }],
+    }),
+  });
+  if (!res.ok) throw new Error(`Claude vision ${res.status}: ${(await res.text()).slice(0, 200)}`);
+
+  const j = await res.json();
+  const blocks: Array<{ type?: string; text?: string }> = Array.isArray(j?.content) ? j.content : [];
+  const out = blocks.filter((b) => b.type === "text").map((b) => b.text ?? "").join("\n").trim();
+  if (!out) throw new Error("Claude vision returned no text block");
+
+  const obj = parseJsonLoose(out);
+  return {
+    doc_type:   "blueprint",
+    confidence: Number(obj.confidence ?? 0.9),
+    summary:    obj.summary ?? "",
+    data:       (obj.data ?? {}) as Record<string, unknown>,
+    raw:        out,
+  };
+}
+
+const BP_HINT = /\b(blueprint|blue ?print|print|drawing|sheet|vrf|riser|iso|bp)\b/i;
+function isBlueprintHint(caption?: string): boolean {
+  return !!caption && BP_HINT.test(caption);
+}
+
+// Entry point for the webhook: Gemini classifies (cheap); if it's a blueprint
+// (or Dave captioned it as one), re-read with Claude for the detailed VRF data.
+export async function readDocument(bytes: Uint8Array, mime: string, caption?: string): Promise<ClassifiedDoc> {
+  const gem = await classifyAndExtract(bytes, mime, caption);
+  const wantBlueprint =
+    (gem.doc_type === "blueprint" || isBlueprintHint(caption)) &&
+    mime.startsWith("image/") && !!ANTHROPIC_KEY;
+  if (!wantBlueprint) return gem;
+  try {
+    return await extractBlueprintWithClaude(bytes, mime, caption);
+  } catch (e) {
+    console.error("Claude blueprint upgrade failed, using Gemini result:", e);
+    return gem.doc_type === "blueprint" ? gem : { ...gem, doc_type: "blueprint" };
+  }
+}
+
 // ── 3. Save the document row ─────────────────────────────────────────────────
 export async function saveDocument(input: {
   telegram_file_id: string;
@@ -237,6 +380,7 @@ export async function actOnClassified(c: ClassifiedDoc): Promise<ActionResult> {
     case "paystub":    return actPaystub(c);
     case "irs_letter": return actIrsLetter(c);
     case "bill_invoice": return actBill(c);
+    case "blueprint":  return actBlueprint(c);
     case "id_document": return {
       action_taken: "noop",
       reply: "🪪 ID doc detected. I'm not storing PII — message ignored.",
@@ -357,6 +501,83 @@ async function actBill(c: ClassifiedDoc): Promise<ActionResult> {
       `If this is a NEW recurring bill, add via SQL or ask me on the laptop. If it's an existing one, just pay it.`,
     ].join("\n"),
   };
+}
+
+interface BlueprintData {
+  sheet_number?: string; title?: string; discipline?: string;
+  revision?: string; scale?: string; system?: string;
+  grids?: string[];
+  indoor_units?: Array<{ tag?: string; type?: string; aff?: string }>;
+  controllers?:  Array<{ tag?: string; type?: string; aff?: string }>;
+  refrigerant_lines?: Array<{ kind?: string; size?: string; boi?: string; note?: string }>;
+  risers?: string[];
+  hangers?: string[];
+  dimensions?: string[];
+  field_notes?: string[];
+  ambiguities?: string[];
+}
+
+async function actBlueprint(c: ClassifiedDoc): Promise<ActionResult> {
+  const d = c.data as BlueprintData;
+  const L: string[] = [];
+
+  // Title block
+  L.push(["📐 BLUEPRINT", d.sheet_number, d.revision ? `Rev ${d.revision}` : ""].filter(Boolean).join(" ") + " — VRF Refrigerant");
+  const sub = [d.title, d.scale ? `Scale ${d.scale}` : ""].filter(Boolean).join(" · ");
+  if (sub) L.push(sub);
+  if (d.system) L.push(d.system);
+  if (d.grids?.length) L.push(`Grids: ${d.grids.join(", ")}`);
+
+  // Refrigerant lines — the heart of the sheet: size + RL/RG + BOI elevation
+  if (d.refrigerant_lines?.length) {
+    L.push("", `REFRIGERANT LINES (${d.refrigerant_lines.length})`);
+    for (const r of d.refrigerant_lines.slice(0, 24)) {
+      const head = [r.size, r.kind].filter(Boolean).join(" ");
+      L.push(`• ${head}${r.boi ? `  BOI ${r.boi}` : ""}${r.note ? `  (${r.note})` : ""}`);
+    }
+  }
+  if (d.indoor_units?.length) {
+    L.push("", "INDOOR UNITS");
+    for (const u of d.indoor_units.slice(0, 18)) {
+      L.push(`• ${[u.tag, u.type].filter(Boolean).join(" ")}${u.aff ? ` @ ${u.aff} AFF` : ""}`);
+    }
+  }
+  if (d.controllers?.length) {
+    L.push("", "CONTROLLERS / JOINTS");
+    for (const b of d.controllers.slice(0, 12)) {
+      L.push(`• ${[b.tag, b.type].filter(Boolean).join(" — ")}${b.aff ? ` @ ${b.aff} AFF` : ""}`);
+    }
+  }
+  if (d.risers?.length) {
+    L.push("", "RISERS");
+    for (const r of d.risers.slice(0, 10)) L.push(`• ${r}`);
+  }
+  if (d.hangers?.length) {
+    L.push("", "🔩 HANGERS (field markups)");
+    for (const h of d.hangers.slice(0, 10)) L.push(`• ${h}`);
+  }
+  if (d.field_notes?.length) {
+    L.push("", "✍️ FIELD NOTES");
+    for (const n of d.field_notes.slice(0, 8)) L.push(`• ${n}`);
+  }
+  if (d.dimensions?.length) L.push("", `DIMS: ${d.dimensions.slice(0, 8).join(" · ")}`);
+
+  if (d.ambiguities?.length) {
+    L.push("", "❓ Couldn't read clearly:");
+    for (const a of d.ambiguities.slice(0, 5)) L.push(`• ${a}`);
+    L.push("(send as a FILE, not a photo + shoot flat/lit = better read)");
+  }
+
+  const hasContent = d.refrigerant_lines?.length || d.indoor_units?.length || d.controllers?.length;
+  if (!hasContent && !d.sheet_number) {
+    return {
+      action_taken: "captured",
+      reply: `📐 Looks like a print, but I couldn't pull much off it.\n${c.summary}\n\nSend it as a FILE (not a photo) and shoot one area flat + lit.`,
+    };
+  }
+
+  L.push("", "Saved — pull it up with /blueprints");
+  return { action_taken: "captured", reply: L.join("\n") };
 }
 
 function mapCategory(guess?: string): string {

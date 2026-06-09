@@ -62,7 +62,7 @@ import {
 } from "../_shared/wealth.ts";
 import { buildForecast, formatForecastBlock, dailyBudget, formatDailyBudgetBlock } from "../_shared/forecast.ts";
 import { getQuote, getQuotes, formatQuote, valuateHoldings, marketConfigured } from "../_shared/market.ts";
-import { downloadTelegramFile, classifyAndExtract, actOnClassified, saveDocument } from "../_shared/vision.ts";
+import { downloadTelegramFile, readDocument, actOnClassified, saveDocument } from "../_shared/vision.ts";
 import { transcribeVoice, UNINTELLIGIBLE } from "../_shared/voice.ts";
 
 const WEBHOOK_SECRET  = Deno.env.get("TELEGRAM_WEBHOOK_SECRET") ?? "";
@@ -238,6 +238,21 @@ async function cmdCaptures(): Promise<string> {
   if (!rows.length) return "📥 No captures in the last 48h.";
   return "📥 LAST 48H CAPTURES\n\n" +
     rows.slice(0, 15).map((c) => `[${c.kind}] ${c.body.slice(0, 90)}`).join("\n");
+}
+
+async function cmdBlueprints(): Promise<string> {
+  const rows = await sbGet(
+    "/documents?doc_type=eq.blueprint&order=created_at.desc&limit=10&select=id,summary,extracted_data,created_at",
+  ) as Array<{ id: number; summary?: string; extracted_data?: Record<string, unknown>; created_at?: string }>;
+  if (!rows.length) return "📐 No blueprints captured yet. Snap a pic of a drawing and I'll read it.";
+  const lines = rows.map((r) => {
+    const d = (r.extracted_data ?? {}) as { sheet_number?: string; title?: string; revision?: string };
+    const tag = [d.sheet_number, d.revision ? `Rev ${d.revision}` : ""].filter(Boolean).join(" ");
+    const label = tag || d.title || r.summary || "blueprint";
+    const date = r.created_at?.slice(0, 10) ?? "";
+    return `#${r.id} ${label}${date ? ` · ${date}` : ""}`;
+  });
+  return "📐 BLUEPRINTS (recent)\n\n" + lines.join("\n") + "\n\nSnap another drawing anytime — I'll read + save it.";
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -962,6 +977,8 @@ async function route(text: string): Promise<string> {
   if (lc.startsWith("/jobsite"))  return cmdJobsite(arg);
   if (lc.startsWith("/line"))     return cmdLine(arg);
   if (lc.startsWith("/captures")) return cmdCaptures();
+  if (lc.startsWith("/blueprints")) return cmdBlueprints();
+  if (lc.startsWith("/bp"))       return cmdBlueprints();
 
   // Financial — day-to-day
   if (lc.startsWith("/irs"))      return cmdIrs();
@@ -1086,7 +1103,7 @@ Deno.serve(async (req) => {
   const userText = message.text;
   try {
     const reply = await route(userText);
-    const trivial = /^\/(status|version|help|start|todos|habits|bills|spending|irs|news|calendar|captures|net|assets|debts|goals|payoff|portfolio|decisions|cash|forecast)/i.test(userText.trim());
+    const trivial = /^\/(status|version|help|start|todos|habits|bills|spending|irs|news|calendar|captures|blueprints|bp|net|assets|debts|goals|payoff|portfolio|decisions|cash|forecast)/i.test(userText.trim());
     if (!trivial) {
       await saveTurn("user", userText);
       await saveTurn("assistant", reply.slice(0, 2000));
@@ -1130,7 +1147,7 @@ async function handlePhoto(photos: TelegramPhotoSize[], caption?: string): Promi
     await sendTelegram("📸 Got it — analyzing...");
 
     const { bytes, mime } = await downloadTelegramFile(fileId);
-    const classified = await classifyAndExtract(bytes, mime, caption);
+    const classified = await readDocument(bytes, mime, caption);
     const result = await actOnClassified(classified);
 
     const docId = await saveDocument({
