@@ -62,6 +62,7 @@ import {
 } from "../_shared/wealth.ts";
 import { buildForecast, formatForecastBlock, dailyBudget, formatDailyBudgetBlock } from "../_shared/forecast.ts";
 import { getQuote, getQuotes, formatQuote, valuateHoldings, marketConfigured } from "../_shared/market.ts";
+import { downloadTelegramFile, classifyAndExtract, actOnClassified, saveDocument } from "../_shared/vision.ts";
 
 const WEBHOOK_SECRET  = Deno.env.get("TELEGRAM_WEBHOOK_SECRET") ?? "";
 const ALLOWED_CHAT_ID = Deno.env.get("TELEGRAM_CHAT_ID") ?? "";
@@ -700,6 +701,14 @@ async function cmdStart(): Promise<string> {
     "SYSTEM",
     "  /status · /version · /quiet 22:00-06:30",
     "",
+    "📸 SNAP A PHOTO (NEW)",
+    "  Receipt → auto-logged as expense",
+    "  Bank statement → balance extracted",
+    "  Credit card statement → debt + spending",
+    "  Paystub → income detected",
+    "  IRS letter → flagged + todo created",
+    "  (works with photos OR PDFs attached as documents)",
+    "",
     "Or just talk to me — I remember the last two weeks of our chats.",
   ].join("\n");
 }
@@ -1038,27 +1047,41 @@ Deno.serve(async (req) => {
     return new Response("Forbidden", { status: 403 });
   }
 
-  let update: { message?: { chat?: { id: number }; text?: string } };
-  try { update = await req.json(); } catch { return new Response("Invalid JSON", { status: 400 }); }
+  let update: TelegramUpdate;
+  try { update = await req.json() as TelegramUpdate; } catch { return new Response("Invalid JSON", { status: 400 }); }
 
   const message = update.message;
-  if (!message?.text || !message.chat?.id) return new Response(JSON.stringify({ ok:true, ignored:true }), { status:200 });
-
+  if (!message?.chat?.id) return new Response(JSON.stringify({ ok:true, ignored:true }), { status:200 });
   if (ALLOWED_CHAT_ID && String(message.chat.id) !== ALLOWED_CHAT_ID) {
     return new Response(JSON.stringify({ ok:true, unauthorized:true }), { status:200 });
   }
 
+  // ── PHOTO INTAKE ────────────────────────────────────────────────────────
+  // Telegram delivers `photo` as an array of size variants (smallest → largest).
+  // Grab the largest and run it through vision.
+  if (message.photo && message.photo.length > 0) {
+    return handlePhoto(message.photo, message.caption);
+  }
+  // ── DOCUMENT INTAKE (PDFs, images sent as document/file) ────────────────
+  if (message.document && message.document.file_id) {
+    const mime = message.document.mime_type ?? "";
+    if (mime.startsWith("image/") || mime === "application/pdf") {
+      return handlePhoto([{ file_id: message.document.file_id }], message.caption);
+    }
+    await sendTelegram(`📎 Got a ${mime || "file"} but I only handle images + PDFs right now.`);
+    return new Response(JSON.stringify({ ok: true, ignored: "non-image-document" }), { status: 200 });
+  }
+  // ── TEXT (the original behavior) ────────────────────────────────────────
+  if (!message.text) return new Response(JSON.stringify({ ok:true, ignored:"no-text" }), { status:200 });
+
   const userText = message.text;
   try {
     const reply = await route(userText);
-
-    // Save the exchange — but skip pure status/list commands to keep memory signal-rich
-    const trivial = /^\/(status|version|help|start|todos|habits|bills|spending|irs|news|calendar|captures)/i.test(userText.trim());
+    const trivial = /^\/(status|version|help|start|todos|habits|bills|spending|irs|news|calendar|captures|net|assets|debts|goals|payoff|portfolio|decisions|cash|forecast)/i.test(userText.trim());
     if (!trivial) {
       await saveTurn("user", userText);
       await saveTurn("assistant", reply.slice(0, 2000));
     }
-
     await sendTelegram(reply);
     await audit({ function_name: "telegram-webhook", action: "reply-sent", details: { command: userText.split(" ")[0] } });
     return new Response(JSON.stringify({ ok:true }), { status:200 });
@@ -1069,3 +1092,67 @@ Deno.serve(async (req) => {
     return new Response(JSON.stringify({ error:String(e) }), { status:500 });
   }
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Photo / document handler
+// ─────────────────────────────────────────────────────────────────────────────
+interface TelegramPhotoSize { file_id: string; file_unique_id?: string; width?: number; height?: number; file_size?: number; }
+interface TelegramDocument { file_id: string; file_unique_id?: string; file_name?: string; mime_type?: string; file_size?: number; }
+interface TelegramMessage {
+  chat?: { id: number };
+  text?: string;
+  caption?: string;
+  photo?: TelegramPhotoSize[];
+  document?: TelegramDocument;
+}
+interface TelegramUpdate { message?: TelegramMessage; }
+
+async function handlePhoto(photos: TelegramPhotoSize[], caption?: string): Promise<Response> {
+  const t0 = Date.now();
+  // Largest variant — Telegram orders smallest → largest, last is highest res
+  const largest = photos[photos.length - 1];
+  const fileId = largest.file_id;
+
+  try {
+    // Acknowledge so Telegram doesn't retry while we work
+    await sendTelegram("📸 Got it — analyzing...");
+
+    const { bytes, mime } = await downloadTelegramFile(fileId);
+    const classified = await classifyAndExtract(bytes, mime, caption);
+    const result = await actOnClassified(classified);
+
+    const docId = await saveDocument({
+      telegram_file_id:   fileId,
+      telegram_unique_id: largest.file_unique_id,
+      source:             "telegram_photo",
+      caption,
+      mime_type:          mime,
+      bytes:              bytes.length,
+      classified,
+      action_taken:       result.action_taken,
+      action_ref:         result.action_ref,
+    });
+
+    const confBar = "█".repeat(Math.round(classified.confidence * 5)) + "░".repeat(5 - Math.round(classified.confidence * 5));
+    const reply = `${result.reply}\n\n📊 ${classified.doc_type} ${confBar} ${(classified.confidence * 100).toFixed(0)}% · doc #${docId.id}`;
+    await sendTelegram(reply);
+    await audit({
+      function_name: "telegram-webhook",
+      action: "photo-processed",
+      details: { doc_type: classified.doc_type, action: result.action_taken, doc_id: docId.id },
+      duration_ms: Date.now() - t0,
+    });
+    return new Response(JSON.stringify({ ok: true, doc_type: classified.doc_type }), { status: 200 });
+  } catch (e) {
+    console.error("photo handler error:", e);
+    await audit({
+      function_name: "telegram-webhook",
+      action: "photo-failed",
+      status: "error",
+      details: { error: String(e) },
+      duration_ms: Date.now() - t0,
+    });
+    try { await sendTelegram(`📸❌ Image failed: ${String(e).slice(0, 200)}`); } catch {}
+    return new Response(JSON.stringify({ error: String(e) }), { status: 500 });
+  }
+}
