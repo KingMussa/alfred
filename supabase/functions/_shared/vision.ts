@@ -158,7 +158,7 @@ export async function classifyAndExtract(
   mime: string,
   caption?: string,
 ): Promise<ClassifiedDoc> {
-  const b64 = btoa(String.fromCharCode(...imageBytes));
+  const b64 = toB64(imageBytes); // chunked — spread form overflows the stack on multi-MB images
   const captionLine = caption ? `\n\nUser caption (hint): "${caption}"` : "";
 
   const body = {
