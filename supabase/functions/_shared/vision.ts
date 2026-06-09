@@ -266,45 +266,55 @@ function parseJsonLoose(text: string): { confidence?: number; summary?: string; 
 
 async function extractBlueprintWithClaude(bytes: Uint8Array, mime: string, caption?: string): Promise<ClassifiedDoc> {
   if (!ANTHROPIC_KEY) throw new Error("no ANTHROPIC_API_KEY");
+  const isPdf = mime === "application/pdf";
   const media = ["image/jpeg", "image/png", "image/gif", "image/webp"].includes(mime) ? mime : "image/jpeg";
   const captionLine = caption ? `\n\nField caption from the fitter: "${caption}"` : "";
+  const data = toB64(bytes);
 
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "x-api-key":         ANTHROPIC_KEY,
-      "anthropic-version": "2023-06-01",
-      "content-type":      "application/json",
-    },
-    body: JSON.stringify({
-      model:      CLAUDE_VISION_MODEL,
-      max_tokens: 8000,
-      thinking:      { type: "adaptive" },
-      output_config: { effort: "high" },
-      messages: [{
-        role: "user",
-        content: [
-          { type: "text", text: VRF_BLUEPRINT_PROMPT + captionLine },
-          { type: "image", source: { type: "base64", media_type: media, data: toB64(bytes) } },
-        ],
-      }],
-    }),
+  // Office sheets arrive as multi-page PDFs — Claude reads those via a document
+  // block; phone photos via an image block.
+  const sourceBlock = isPdf
+    ? { type: "document", source: { type: "base64", media_type: "application/pdf", data } }
+    : { type: "image", source: { type: "base64", media_type: media, data } };
+
+  const body = JSON.stringify({
+    model:      CLAUDE_VISION_MODEL,
+    max_tokens: 8000,
+    thinking:      { type: "adaptive" },
+    output_config: { effort: "high" },
+    messages: [{ role: "user", content: [{ type: "text", text: VRF_BLUEPRINT_PROMPT + captionLine }, sourceBlock] }],
   });
-  if (!res.ok) throw new Error(`Claude vision ${res.status}: ${(await res.text()).slice(0, 200)}`);
 
-  const j = await res.json();
-  const blocks: Array<{ type?: string; text?: string }> = Array.isArray(j?.content) ? j.content : [];
-  const out = blocks.filter((b) => b.type === "text").map((b) => b.text ?? "").join("\n").trim();
-  if (!out) throw new Error("Claude vision returned no text block");
+  let lastErr = "unknown error";
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+      body,
+    });
 
-  const obj = parseJsonLoose(out);
-  return {
-    doc_type:   "blueprint",
-    confidence: Number(obj.confidence ?? 0.9),
-    summary:    obj.summary ?? "",
-    data:       (obj.data ?? {}) as Record<string, unknown>,
-    raw:        out,
-  };
+    if (res.status === 429 || res.status === 500 || res.status === 529) {
+      lastErr = `HTTP ${res.status}`;
+      await new Promise((r) => setTimeout(r, 1500 * 2 ** attempt)); // 1.5s, 3s, 6s
+      continue;
+    }
+    if (!res.ok) throw new Error(`Claude vision ${res.status}: ${(await res.text()).slice(0, 200)}`);
+
+    const j = await res.json();
+    const blocks: Array<{ type?: string; text?: string }> = Array.isArray(j?.content) ? j.content : [];
+    const out = blocks.filter((b) => b.type === "text").map((b) => b.text ?? "").join("\n").trim();
+    if (!out) throw new Error("Claude vision returned no text block");
+
+    const obj = parseJsonLoose(out);
+    return {
+      doc_type:   "blueprint",
+      confidence: Number(obj.confidence ?? 0.9),
+      summary:    obj.summary ?? "",
+      data:       (obj.data ?? {}) as Record<string, unknown>,
+      raw:        out,
+    };
+  }
+  throw new Error(`Claude vision unavailable after retries — ${lastErr}`);
 }
 
 const BP_HINT = /\b(blueprint|blue ?print|print|drawing|sheet|vrf|riser|iso|bp)\b/i;
@@ -318,7 +328,7 @@ export async function readDocument(bytes: Uint8Array, mime: string, caption?: st
   const gem = await classifyAndExtract(bytes, mime, caption);
   const wantBlueprint =
     (gem.doc_type === "blueprint" || isBlueprintHint(caption)) &&
-    mime.startsWith("image/") && !!ANTHROPIC_KEY;
+    (mime.startsWith("image/") || mime === "application/pdf") && !!ANTHROPIC_KEY;
   if (!wantBlueprint) return gem;
   try {
     return await extractBlueprintWithClaude(bytes, mime, caption);

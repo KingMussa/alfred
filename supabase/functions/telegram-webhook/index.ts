@@ -42,7 +42,8 @@ import { aiChat } from "../_shared/ai.ts";
 import { getNewEmails, getTodaysEmails } from "../_shared/gmail.ts";
 import { getUpcomingEvents } from "../_shared/calendar.ts";
 import { getTopNews } from "../_shared/news.ts";
-import { sendTelegram } from "../_shared/telegram.ts";
+import { sendTelegram, sendTelegramPhoto, sendTelegramDocument } from "../_shared/telegram.ts";
+import { uploadDoc, signedUrl, extForMime } from "../_shared/storage.ts";
 import {
   saveCapture, getOpenTodos, completeTodo, getRecentCaptures,
   parseExpense, saveExpense,
@@ -94,6 +95,33 @@ async function sbPatch(path: string, body: Record<string,unknown>): Promise<void
     body: JSON.stringify(body),
   });
   if (!r.ok) throw new Error(`SB PATCH ${path}: ${r.status} ${await r.text()}`);
+}
+
+// Idempotency: claim a Telegram update_id. Returns true the first time we see
+// it (safe to process), false on a retry (skip). Fail-open — on error we
+// process anyway rather than silently drop a message.
+async function claimUpdate(updateId: number): Promise<boolean> {
+  try {
+    const r = await fetch(`${SB}/processed_updates`, {
+      method: "POST",
+      headers: headers({ "Prefer": "return=representation,resolution=ignore-duplicates" }),
+      body: JSON.stringify({ update_id: updateId }),
+    });
+    if (!r.ok) { console.error(`claimUpdate ${r.status}: ${await r.text()}`); return true; }
+    const rows = await r.json();
+    return Array.isArray(rows) && rows.length > 0; // inserted = fresh; empty = duplicate
+  } catch (e) {
+    console.error("claimUpdate error:", e);
+    return true;
+  }
+}
+
+// Run heavy work AFTER responding 200, so a slow vision read can't make Telegram
+// time out and redeliver the update (which would double-process it).
+declare const EdgeRuntime: { waitUntil(p: Promise<unknown>): void } | undefined;
+function background(p: Promise<unknown>): void {
+  const safe = p.catch((e) => console.error("background task failed:", e));
+  if (typeof EdgeRuntime !== "undefined" && EdgeRuntime?.waitUntil) EdgeRuntime.waitUntil(safe);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -252,7 +280,44 @@ async function cmdBlueprints(): Promise<string> {
     const date = r.created_at?.slice(0, 10) ?? "";
     return `#${r.id} ${label}${date ? ` · ${date}` : ""}`;
   });
-  return "📐 BLUEPRINTS (recent)\n\n" + lines.join("\n") + "\n\nSnap another drawing anytime — I'll read + save it.";
+  return "📐 BLUEPRINTS (recent)\n\n" + lines.join("\n") + "\n\nPull one up with /bp <id> — I'll re-send the sheet.";
+}
+
+async function cmdBlueprintShow(idStr: string): Promise<string> {
+  const id = parseInt(idStr, 10);
+  if (!Number.isFinite(id)) return "Usage: /bp <number> — see /blueprints for IDs.";
+  const rows = await sbGet(
+    `/documents?id=eq.${id}&select=id,doc_type,summary,extracted_data,storage_path,mime_type`,
+  ) as Array<{ id: number; doc_type?: string; summary?: string; extracted_data?: Record<string, unknown>; storage_path?: string; mime_type?: string }>;
+  if (!rows.length) return `📐 No document #${id}.`;
+  const r = rows[0];
+
+  // Re-send the archived original so Dave sees the real sheet, not just text.
+  if (r.storage_path) {
+    try {
+      const url = await signedUrl(r.storage_path, 3600);
+      const cap = `#${r.id}${r.summary ? ` — ${r.summary}` : ""}`;
+      if ((r.mime_type ?? "").includes("pdf")) await sendTelegramDocument(url, cap);
+      else await sendTelegramPhoto(url, cap);
+    } catch (e) {
+      console.error("blueprint show send failed:", e);
+    }
+  }
+
+  const d = (r.extracted_data ?? {}) as {
+    sheet_number?: string; title?: string; revision?: string;
+    refrigerant_lines?: unknown[]; indoor_units?: unknown[]; controllers?: unknown[];
+  };
+  const head = [d.sheet_number, d.revision ? `Rev ${d.revision}` : "", d.title].filter(Boolean).join(" · ");
+  const counts = [
+    d.refrigerant_lines?.length ? `${d.refrigerant_lines.length} lines` : "",
+    d.indoor_units?.length ? `${d.indoor_units.length} units` : "",
+    d.controllers?.length ? `${d.controllers.length} controllers` : "",
+  ].filter(Boolean).join(" · ");
+  return [
+    `📐 Document #${r.id}${r.storage_path ? "" : "  (no archived image)"}`,
+    head, counts, r.summary ?? "",
+  ].filter(Boolean).join("\n");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -978,7 +1043,8 @@ async function route(text: string): Promise<string> {
   if (lc.startsWith("/line"))     return cmdLine(arg);
   if (lc.startsWith("/captures")) return cmdCaptures();
   if (lc.startsWith("/blueprints")) return cmdBlueprints();
-  if (lc.startsWith("/bp"))       return cmdBlueprints();
+  if (lc.startsWith("/blueprint"))  return /^\d+$/.test(arg) ? cmdBlueprintShow(arg) : cmdBlueprints();
+  if (lc.startsWith("/bp"))         return /^\d+$/.test(arg) ? cmdBlueprintShow(arg) : cmdBlueprints();
 
   // Financial — day-to-day
   if (lc.startsWith("/irs"))      return cmdIrs();
@@ -1074,28 +1140,36 @@ Deno.serve(async (req) => {
     return new Response(JSON.stringify({ ok:true, unauthorized:true }), { status:200 });
   }
 
-  // ── PHOTO INTAKE ────────────────────────────────────────────────────────
-  // Telegram delivers `photo` as an array of size variants (smallest → largest).
-  // Grab the largest and run it through vision.
-  if (message.photo && message.photo.length > 0) {
-    return handlePhoto(message.photo, message.caption);
+  // ── Idempotency: skip Telegram retries before doing any work ─────────────
+  if (typeof update.update_id === "number") {
+    const fresh = await claimUpdate(update.update_id);
+    if (!fresh) return new Response(JSON.stringify({ ok: true, duplicate: true }), { status: 200 });
   }
-  // ── DOCUMENT INTAKE (PDFs, images sent as document/file) ────────────────
+
+  // ── PHOTO / DOCUMENT / VOICE — process in the background, ack 200 now ─────
+  // Vision reads can take 15-40s (Claude on a dense print). Returning 200
+  // immediately stops Telegram from timing out and redelivering the update,
+  // which (combined with the dedupe above) is what prevents double-processing.
+  if (message.photo && message.photo.length > 0) {
+    background(handlePhoto(message.photo, message.caption));
+    return new Response(JSON.stringify({ ok: true, queued: "photo" }), { status: 200 });
+  }
   if (message.document && message.document.file_id) {
     const mime = message.document.mime_type ?? "";
     if (mime.startsWith("image/") || mime === "application/pdf") {
-      return handlePhoto([{ file_id: message.document.file_id }], message.caption);
+      background(handlePhoto([{ file_id: message.document.file_id }], message.caption));
+      return new Response(JSON.stringify({ ok: true, queued: "document" }), { status: 200 });
     }
     await sendTelegram(`📎 Got a ${mime || "file"} but I only handle images + PDFs right now.`);
     return new Response(JSON.stringify({ ok: true, ignored: "non-image-document" }), { status: 200 });
   }
-  // ── VOICE INTAKE (mic notes + audio files) ──────────────────────────────
-  // Transcribe, then run the transcript through the exact same router as text.
   if (message.voice && message.voice.file_id) {
-    return handleVoice(message.voice.file_id, message.caption);
+    background(handleVoice(message.voice.file_id, message.caption));
+    return new Response(JSON.stringify({ ok: true, queued: "voice" }), { status: 200 });
   }
   if (message.audio && message.audio.file_id) {
-    return handleVoice(message.audio.file_id, message.caption);
+    background(handleVoice(message.audio.file_id, message.caption));
+    return new Response(JSON.stringify({ ok: true, queued: "audio" }), { status: 200 });
   }
   // ── TEXT (the original behavior) ────────────────────────────────────────
   if (!message.text) return new Response(JSON.stringify({ ok:true, ignored:"no-text" }), { status:200 });
@@ -1103,7 +1177,7 @@ Deno.serve(async (req) => {
   const userText = message.text;
   try {
     const reply = await route(userText);
-    const trivial = /^\/(status|version|help|start|todos|habits|bills|spending|irs|news|calendar|captures|blueprints|bp|net|assets|debts|goals|payoff|portfolio|decisions|cash|forecast)/i.test(userText.trim());
+    const trivial = /^\/(status|version|help|start|todos|habits|bills|spending|irs|news|calendar|captures|blueprint|bp|net|assets|debts|goals|payoff|portfolio|decisions|cash|forecast)/i.test(userText.trim());
     if (!trivial) {
       await saveTurn("user", userText);
       await saveTurn("assistant", reply.slice(0, 2000));
@@ -1134,7 +1208,7 @@ interface TelegramMessage {
   voice?: TelegramVoice;   // tap-and-hold mic note (Opus/.oga)
   audio?: TelegramVoice;   // sent audio file
 }
-interface TelegramUpdate { message?: TelegramMessage; }
+interface TelegramUpdate { update_id?: number; message?: TelegramMessage; }
 
 async function handlePhoto(photos: TelegramPhotoSize[], caption?: string): Promise<Response> {
   const t0 = Date.now();
@@ -1161,6 +1235,17 @@ async function handlePhoto(photos: TelegramPhotoSize[], caption?: string): Promi
       action_taken:       result.action_taken,
       action_ref:         result.action_ref,
     });
+
+    // Archive the original image/PDF so /bp <id> can re-show the real sheet.
+    // Non-fatal — never let an archive hiccup block the reply.
+    try {
+      const key = largest.file_unique_id ?? String(docId.id);
+      const path = `inbox/${key}.${extForMime(mime)}`;
+      await uploadDoc(path, bytes, mime);
+      await sbPatch(`/documents?id=eq.${docId.id}`, { storage_path: path });
+    } catch (e) {
+      console.error("storage archive failed (non-fatal):", e);
+    }
 
     const confBar = "█".repeat(Math.round(classified.confidence * 5)) + "░".repeat(5 - Math.round(classified.confidence * 5));
     const reply = `${result.reply}\n\n📊 ${classified.doc_type} ${confBar} ${(classified.confidence * 100).toFixed(0)}% · doc #${docId.id}`;

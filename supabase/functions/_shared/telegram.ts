@@ -45,6 +45,36 @@ export async function sendTelegram(body: string): Promise<void> {
   }
 }
 
+// Send a photo by URL (e.g. a signed Storage URL) or by a Telegram file_id.
+export async function sendTelegramPhoto(photo: string, caption?: string): Promise<void> {
+  if (!telegramConfigured()) throw new Error("Telegram not configured");
+  const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chat_id: CHAT_ID, photo, caption: caption?.slice(0, 1024) }),
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    console.error("Telegram sendPhoto error:", err);
+    throw new Error(`Telegram sendPhoto ${res.status}: ${err}`);
+  }
+}
+
+// Send a document (PDF etc.) by URL or file_id.
+export async function sendTelegramDocument(document: string, caption?: string): Promise<void> {
+  if (!telegramConfigured()) throw new Error("Telegram not configured");
+  const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendDocument`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chat_id: CHAT_ID, document, caption: caption?.slice(0, 1024) }),
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    console.error("Telegram sendDocument error:", err);
+    throw new Error(`Telegram sendDocument ${res.status}: ${err}`);
+  }
+}
+
 function splitMessage(str: string, size: number): string[] {
   if (str.length <= size) return [str];
   const chunks: string[] = [];
