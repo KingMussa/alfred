@@ -108,6 +108,7 @@ export interface ParsedExpense {
   amount: number;
   category: string;
   note: string;
+  [k: string]: unknown;
 }
 
 export function parseExpense(text: string): ParsedExpense | null {
