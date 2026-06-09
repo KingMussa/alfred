@@ -44,6 +44,7 @@ import { getUpcomingEvents } from "../_shared/calendar.ts";
 import { getTopNews } from "../_shared/news.ts";
 import { sendTelegram, sendTelegramPhoto, sendTelegramDocument } from "../_shared/telegram.ts";
 import { uploadDoc, signedUrl, extForMime } from "../_shared/storage.ts";
+import { compressImage } from "../_shared/compress.ts";
 import {
   saveCapture, getOpenTodos, completeTodo, getRecentCaptures,
   parseExpense, saveExpense,
@@ -1220,7 +1221,9 @@ async function handlePhoto(photos: TelegramPhotoSize[], caption?: string): Promi
     // Acknowledge so Telegram doesn't retry while we work
     await sendTelegram("📸 Got it — analyzing...");
 
-    const { bytes, mime } = await downloadTelegramFile(fileId);
+    const raw = await downloadTelegramFile(fileId);
+    // Shrink big jobsite files so they get the sharp Claude read + cost less.
+    const { bytes, mime, resized, fromBytes } = await compressImage(raw.bytes, raw.mime);
     const classified = await readDocument(bytes, mime, caption);
     const result = await actOnClassified(classified);
 
@@ -1253,7 +1256,10 @@ async function handlePhoto(photos: TelegramPhotoSize[], caption?: string): Promi
     await audit({
       function_name: "telegram-webhook",
       action: "photo-processed",
-      details: { doc_type: classified.doc_type, action: result.action_taken, doc_id: docId.id },
+      details: {
+        doc_type: classified.doc_type, action: result.action_taken, doc_id: docId.id,
+        compressed: resized ? `${(fromBytes / 1e6).toFixed(1)}→${(bytes.length / 1e6).toFixed(1)}MB` : null,
+      },
       duration_ms: Date.now() - t0,
     });
     return new Response(JSON.stringify({ ok: true, doc_type: classified.doc_type }), { status: 200 });
