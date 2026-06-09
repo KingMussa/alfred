@@ -1,23 +1,36 @@
-// AI wrapper — Claude Haiku (primary) with Gemini 2.5 Flash fallback.
+// AI wrapper — Claude Haiku 4.5 (primary) with Gemini 2.5 Flash fallback.
 // Set ANTHROPIC_API_KEY in Supabase secrets to use Claude.
-// If absent, falls back to Gemini free tier automatically.
+// If Claude is unset OR fails after retries, falls back to Gemini automatically.
 
 const ANTHROPIC_KEY = Deno.env.get("ANTHROPIC_API_KEY");
-const GEMINI_KEY    = Deno.env.get("GEMINI_API_KEY")!;
+const GEMINI_KEY    = Deno.env.get("GEMINI_API_KEY");
+
+// Anthropic statuses worth retrying (rate limit / server / overloaded).
+const RETRYABLE = new Set([429, 500, 529]);
 
 /**
  * Send a prompt to the best available AI and return the text response.
- * Claude Haiku if ANTHROPIC_API_KEY is set, Gemini 2.5 Flash otherwise.
+ * Tries Claude Haiku 4.5 if ANTHROPIC_API_KEY is set; if that call fails
+ * (after its own retries), falls through to Gemini 2.5 Flash. If no Claude
+ * key is set, goes straight to Gemini.
  */
 export async function aiChat(prompt: string, maxTokens = 500): Promise<string> {
-  return ANTHROPIC_KEY
-    ? claudeChat(prompt, maxTokens)
-    : geminiChat(prompt, maxTokens);
+  if (ANTHROPIC_KEY) {
+    try {
+      return await claudeChat(prompt, maxTokens);
+    } catch (err) {
+      // Real fallback: Claude is down/overloaded — try Gemini before giving up.
+      console.error(`Claude unavailable, falling back to Gemini: ${err}`);
+    }
+  }
+  return geminiChat(prompt, maxTokens);
 }
 
-// ── Claude Haiku — fast, cheap (~$0.25/1M input tokens) ─────────────────────
+// ── Claude Haiku 4.5 — fast, cheap ($1/1M input, $5/1M output) ──────────────
 async function claudeChat(prompt: string, maxTokens: number): Promise<string> {
-  for (let attempt = 0; attempt < 2; attempt++) {
+  let lastErr = "unknown error";
+
+  for (let attempt = 0; attempt < 3; attempt++) {
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
@@ -32,9 +45,10 @@ async function claudeChat(prompt: string, maxTokens: number): Promise<string> {
       }),
     });
 
-    if (res.status === 529 || res.status === 529) {
-      // Overloaded — brief backoff
-      await new Promise((r) => setTimeout(r, 3000));
+    if (RETRYABLE.has(res.status)) {
+      // Overloaded / rate-limited / server error — back off and retry.
+      lastErr = `HTTP ${res.status} (retryable)`;
+      await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt)); // 1s, 2s, 4s
       continue;
     }
 
@@ -51,11 +65,15 @@ async function claudeChat(prompt: string, maxTokens: number): Promise<string> {
     return text;
   }
 
-  throw new Error("Claude API unavailable after retry — falling through to Gemini.");
+  throw new Error(`Claude API unavailable after 3 attempts — ${lastErr}`);
 }
 
 // ── Gemini 2.5 Flash — free tier fallback ───────────────────────────────────
 async function geminiChat(prompt: string, maxTokens: number): Promise<string> {
+  if (!GEMINI_KEY) {
+    throw new Error("aiChat failed: Claude unavailable and no GEMINI_API_KEY set for fallback.");
+  }
+
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`;
 
   // Gemini 2.5 Flash uses "thinking tokens" that count against maxOutputTokens.
