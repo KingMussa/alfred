@@ -163,7 +163,7 @@ export async function classifyAndExtract(
   const b64 = toB64(imageBytes); // chunked — spread form overflows the stack on multi-MB images
   const captionLine = caption ? `\n\nUser caption (hint): "${caption}"` : "";
 
-  const body = {
+  const body = JSON.stringify({
     contents: [{
       parts: [
         { text: CLASSIFICATION_PROMPT + captionLine },
@@ -171,43 +171,48 @@ export async function classifyAndExtract(
       ],
     }],
     generationConfig: {
-      maxOutputTokens: 2000,
+      maxOutputTokens: 8000,          // was 2000 — too small; dense sheets truncated mid-JSON
       temperature: 0.1,
       responseMimeType: "application/json",
       thinkingConfig: { thinkingBudget: 0 },
     },
-  };
+  });
 
-  const r = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`,
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    },
-  );
-  if (!r.ok) {
-    const err = await r.text();
-    throw new Error(`Gemini Vision ${r.status}: ${err.slice(0, 200)}`);
-  }
-  const data = await r.json();
-  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!text) throw new Error("Gemini returned no text — possibly safety block");
+  let lastErr = "unknown error";
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const r = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`,
+      { method: "POST", headers: { "content-type": "application/json" }, body },
+    );
 
-  let parsed: ClassifiedDoc;
-  try {
-    const obj = JSON.parse(text);
-    parsed = {
-      doc_type: obj.doc_type ?? "other",
-      confidence: Number(obj.confidence ?? 0.5),
-      summary: obj.summary ?? "",
-      data: obj.data ?? {},
-      raw: text,
-    };
-  } catch (e) {
-    throw new Error(`Could not parse Gemini JSON: ${e}. Raw: ${text.slice(0, 200)}`);
+    // Overload (503) and rate-limit (429) are transient — back off and retry.
+    if (r.status === 429 || r.status === 500 || r.status === 503 || r.status === 529) {
+      lastErr = `Gemini Vision ${r.status}`;
+      await new Promise((res) => setTimeout(res, 2000 * 2 ** attempt)); // 2s, 4s, 8s
+      continue;
+    }
+    if (!r.ok) throw new Error(`Gemini Vision ${r.status}: ${(await r.text()).slice(0, 200)}`);
+
+    const data = await r.json();
+    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!text) throw new Error("Gemini returned no text — possibly safety block");
+
+    try {
+      const obj = parseJsonLoose(text) as unknown as {
+        doc_type?: string; confidence?: number; summary?: string; data?: Record<string, unknown>;
+      };
+      return {
+        doc_type:   (obj.doc_type as DocType) ?? "other",
+        confidence: Number(obj.confidence ?? 0.5),
+        summary:    obj.summary ?? "",
+        data:       obj.data ?? {},
+        raw:        text,
+      };
+    } catch (e) {
+      throw new Error(`Could not parse Gemini JSON: ${e}. Raw: ${text.slice(0, 200)}`);
+    }
   }
-  return parsed;
+  throw new Error(`Gemini Vision unavailable after retries — ${lastErr}`);
 }
 
 // ── 2b. High-quality blueprint read via Claude vision (Opus) ─────────────────
@@ -278,7 +283,7 @@ async function extractBlueprintWithClaude(bytes: Uint8Array, mime: string, capti
 
   const body = JSON.stringify({
     model:      CLAUDE_VISION_MODEL,
-    max_tokens: 8000,
+    max_tokens: 12000,
     thinking:      { type: "adaptive" },
     output_config: { effort: "high" },
     messages: [{ role: "user", content: [{ type: "text", text: VRF_BLUEPRINT_PROMPT + captionLine }, sourceBlock] }],
@@ -324,10 +329,28 @@ function isBlueprintHint(caption?: string): boolean {
 // Entry point for the webhook: Gemini classifies (cheap); if it's a blueprint
 // (or Dave captioned it as one), re-read with Claude for the detailed VRF data.
 export async function readDocument(bytes: Uint8Array, mime: string, caption?: string): Promise<ClassifiedDoc> {
-  const gem = await classifyAndExtract(bytes, mime, caption);
-  const wantBlueprint =
-    (gem.doc_type === "blueprint" || isBlueprintHint(caption)) &&
-    (mime.startsWith("image/") || mime === "application/pdf") && !!ANTHROPIC_KEY;
+  const canClaude = (mime.startsWith("image/") || mime === "application/pdf") && !!ANTHROPIC_KEY;
+
+  // First pass: Gemini classifies cheaply. If Gemini is down/overloaded or
+  // truncates, don't fail the whole read — let Claude take over (it's the
+  // reliable reader, and a jobsite photo is almost always a blueprint).
+  let gem: ClassifiedDoc;
+  try {
+    gem = await classifyAndExtract(bytes, mime, caption);
+  } catch (e) {
+    console.error("Gemini classify failed:", e);
+    if (canClaude) {
+      try {
+        return await extractBlueprintWithClaude(bytes, mime, caption);
+      } catch (e2) {
+        console.error("Claude fallback also failed:", e2);
+        throw e;
+      }
+    }
+    throw e;
+  }
+
+  const wantBlueprint = (gem.doc_type === "blueprint" || isBlueprintHint(caption)) && canClaude;
   if (!wantBlueprint) return gem;
   try {
     return await extractBlueprintWithClaude(bytes, mime, caption);
