@@ -30,6 +30,10 @@ export async function downloadTelegramFile(fileId: string): Promise<{ bytes: Uin
   const mime = path.endsWith(".png") ? "image/png"
     : path.endsWith(".webp") ? "image/webp"
     : path.endsWith(".pdf") ? "application/pdf"
+    : path.endsWith(".oga") || path.endsWith(".ogg") || path.endsWith(".opus") ? "audio/ogg"
+    : path.endsWith(".mp3") ? "audio/mpeg"
+    : path.endsWith(".m4a") ? "audio/mp4"
+    : path.endsWith(".wav") ? "audio/wav"
     : "image/jpeg";
   return { bytes: new Uint8Array(buf), mime };
 }

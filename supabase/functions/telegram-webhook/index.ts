@@ -63,6 +63,7 @@ import {
 import { buildForecast, formatForecastBlock, dailyBudget, formatDailyBudgetBlock } from "../_shared/forecast.ts";
 import { getQuote, getQuotes, formatQuote, valuateHoldings, marketConfigured } from "../_shared/market.ts";
 import { downloadTelegramFile, classifyAndExtract, actOnClassified, saveDocument } from "../_shared/vision.ts";
+import { transcribeVoice, UNINTELLIGIBLE } from "../_shared/voice.ts";
 
 const WEBHOOK_SECRET  = Deno.env.get("TELEGRAM_WEBHOOK_SECRET") ?? "";
 const ALLOWED_CHAT_ID = Deno.env.get("TELEGRAM_CHAT_ID") ?? "";
@@ -1071,6 +1072,14 @@ Deno.serve(async (req) => {
     await sendTelegram(`📎 Got a ${mime || "file"} but I only handle images + PDFs right now.`);
     return new Response(JSON.stringify({ ok: true, ignored: "non-image-document" }), { status: 200 });
   }
+  // ── VOICE INTAKE (mic notes + audio files) ──────────────────────────────
+  // Transcribe, then run the transcript through the exact same router as text.
+  if (message.voice && message.voice.file_id) {
+    return handleVoice(message.voice.file_id, message.caption);
+  }
+  if (message.audio && message.audio.file_id) {
+    return handleVoice(message.audio.file_id, message.caption);
+  }
   // ── TEXT (the original behavior) ────────────────────────────────────────
   if (!message.text) return new Response(JSON.stringify({ ok:true, ignored:"no-text" }), { status:200 });
 
@@ -1098,12 +1107,15 @@ Deno.serve(async (req) => {
 // ─────────────────────────────────────────────────────────────────────────────
 interface TelegramPhotoSize { file_id: string; file_unique_id?: string; width?: number; height?: number; file_size?: number; }
 interface TelegramDocument { file_id: string; file_unique_id?: string; file_name?: string; mime_type?: string; file_size?: number; }
+interface TelegramVoice { file_id: string; file_unique_id?: string; duration?: number; mime_type?: string; file_size?: number; }
 interface TelegramMessage {
   chat?: { id: number };
   text?: string;
   caption?: string;
   photo?: TelegramPhotoSize[];
   document?: TelegramDocument;
+  voice?: TelegramVoice;   // tap-and-hold mic note (Opus/.oga)
+  audio?: TelegramVoice;   // sent audio file
 }
 interface TelegramUpdate { message?: TelegramMessage; }
 
@@ -1153,6 +1165,82 @@ async function handlePhoto(photos: TelegramPhotoSize[], caption?: string): Promi
       duration_ms: Date.now() - t0,
     });
     try { await sendTelegram(`📸❌ Image failed: ${String(e).slice(0, 200)}`); } catch {}
+    return new Response(JSON.stringify({ error: String(e) }), { status: 500 });
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Voice handler — transcribe, normalize spoken intent, route like text
+// ─────────────────────────────────────────────────────────────────────────────
+
+// A spoken note has no leading slash. If it opens with a bucket keyword
+// ("note ...", "todo ...", "remind me to ...", "spent ..."), rewrite it to the
+// matching command so it lands in the right place. Everything else passes
+// through to route() → Alfred's natural-language brain.
+function normalizeSpokenCommand(t: string): string {
+  const s = t.trim();
+  if (s.startsWith("/")) return s; // already a command (e.g. dictated "slash todo")
+
+  const map: Array<[RegExp, string]> = [
+    [/^(?:remind me to|i need to|todo|to do)\b[:,]?\s*/i, "/todo "],
+    [/^(?:notes?)\b[:,]?\s*/i,                            "/note "],
+    [/^idea\b[:,]?\s*/i,                                  "/idea "],
+    [/^(?:win|won)\b[:,]?\s*/i,                           "/win "],
+    [/^(?:jobsite|job site)\b[:,]?\s*/i,                  "/jobsite "],
+    [/^line\b[:,]?\s*/i,                                  "/line "],
+    [/^journal\b[:,]?\s*/i,                               "/journal "],
+    [/^(?:expense|spent|log expense)\b[:,]?\s*/i,         "/expense "],
+  ];
+  for (const [re, cmd] of map) {
+    if (re.test(s)) return s.replace(re, cmd);
+  }
+  return s;
+}
+
+async function handleVoice(fileId: string, caption?: string): Promise<Response> {
+  const t0 = Date.now();
+  try {
+    // Acknowledge immediately so Telegram doesn't retry while Gemini works.
+    await sendTelegram("🎙️ Got it — transcribing...");
+
+    const { transcript, bytes } = await transcribeVoice(fileId);
+
+    if (!transcript || transcript === UNINTELLIGIBLE) {
+      await sendTelegram("🎙️❓ Couldn't make out the audio. Try again or type it.");
+      await audit({ function_name: "telegram-webhook", action: "voice-unintelligible", duration_ms: Date.now() - t0 });
+      return new Response(JSON.stringify({ ok: true, voice: "unintelligible" }), { status: 200 });
+    }
+
+    // A caption sent with the voice note is treated as an extra hint/append.
+    const spoken     = caption ? `${transcript} ${caption}` : transcript;
+    const normalized = normalizeSpokenCommand(spoken);
+    const reply      = await route(normalized);
+
+    // Always echo what was heard — transcription isn't perfect, and Dave needs
+    // to trust that "log expense 47 gas" became the right thing.
+    const out = `🎙️ "${transcript}"\n\n${reply}`;
+
+    // Voice is always worth remembering (unlike trivial typed lookups).
+    await saveTurn("user", `🎙️ ${spoken}`);
+    await saveTurn("assistant", reply.slice(0, 2000));
+    await sendTelegram(out);
+    await audit({
+      function_name: "telegram-webhook",
+      action: "voice-processed",
+      details: { routed_to: normalized.split(" ")[0], chars: transcript.length, bytes },
+      duration_ms: Date.now() - t0,
+    });
+    return new Response(JSON.stringify({ ok: true, voice: true }), { status: 200 });
+  } catch (e) {
+    console.error("voice handler error:", e);
+    await audit({
+      function_name: "telegram-webhook",
+      action: "voice-failed",
+      status: "error",
+      details: { error: String(e) },
+      duration_ms: Date.now() - t0,
+    });
+    try { await sendTelegram(`🎙️❌ Voice failed: ${String(e).slice(0, 200)}`); } catch {}
     return new Response(JSON.stringify({ error: String(e) }), { status: 500 });
   }
 }
