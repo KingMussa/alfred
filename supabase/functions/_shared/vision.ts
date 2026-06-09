@@ -7,6 +7,8 @@
 // ║ returned for Dave to confirm + apply via /asset, /debt, etc.         ║
 // ╚═══════════════════════════════════════════════════════════════════════╝
 
+import { encodeBase64 } from "https://deno.land/std@0.224.0/encoding/base64.ts";
+
 const URL = Deno.env.get("SUPABASE_URL")!;
 const KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const GEMINI_KEY = Deno.env.get("GEMINI_API_KEY")!;
@@ -247,13 +249,10 @@ Record red-pen hanger markups under "hangers" and any handwriting under "field_n
 Use empty arrays / null where you genuinely can't read it — NEVER invent sizes, counts, or
 elevations. Put glare / cutoff / unreadable spots in "ambiguities". Output ONLY the JSON object.`;
 
-// btoa(String.fromCharCode(...bytes)) overflows the call stack on multi-MB photos;
-// encode in 32 KB chunks.
+// Native std encoder — spreading bytes into String.fromCharCode(...) (even in
+// chunks) overflows the edge runtime's call stack on multi-MB images.
 function toB64(bytes: Uint8Array): string {
-  let s = "";
-  const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) s += String.fromCharCode(...bytes.subarray(i, i + chunk));
-  return btoa(s);
+  return encodeBase64(bytes);
 }
 
 function parseJsonLoose(text: string): { confidence?: number; summary?: string; data?: Record<string, unknown> } {

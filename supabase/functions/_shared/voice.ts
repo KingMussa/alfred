@@ -11,6 +11,7 @@
 // ╚═══════════════════════════════════════════════════════════════════════╝
 
 import { downloadTelegramFile } from "./vision.ts";
+import { encodeBase64 } from "https://deno.land/std@0.224.0/encoding/base64.ts";
 
 const GEMINI_KEY = Deno.env.get("GEMINI_API_KEY")!;
 
@@ -23,15 +24,10 @@ const TRANSCRIBE_PROMPT =
   `Write numbers as digits (e.g. "47 dollars" not "forty-seven dollars"). ` +
   `If the audio is silent, empty, or unintelligible, return exactly: ${UNINTELLIGIBLE}`;
 
-// btoa(String.fromCharCode(...bytes)) blows the call stack on long clips —
-// encode in 32 KB chunks so a 2-minute voice note doesn't crash the function.
+// Native std encoder — spreading bytes into String.fromCharCode(...) can
+// overflow the call stack on larger clips.
 function toBase64(bytes: Uint8Array): string {
-  let binary = "";
-  const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
-  }
-  return btoa(binary);
+  return encodeBase64(bytes);
 }
 
 export interface Transcription {
