@@ -269,6 +269,51 @@ function parseJsonLoose(text: string): { confidence?: number; summary?: string; 
   return JSON.parse(t);
 }
 
+// Strict JSON Schema for Anthropic structured outputs — Claude is forced to
+// return exactly this shape, so the response can't truncate into broken JSON
+// (the parse-failure class we hit before). All objects: additionalProperties=false,
+// optional scalars are nullable, every field required.
+const STR = { type: ["string", "null"] };
+const STR_ARR = { type: "array", items: { type: "string" } };
+const pipingItem = {
+  type: "object", additionalProperties: false,
+  properties: { service: STR, size: STR, material: STR, elev: STR, note: STR },
+  required: ["service", "size", "material", "elev", "note"],
+};
+const ductItem = {
+  type: "object", additionalProperties: false,
+  properties: { size: STR, service: STR, elev: STR, note: STR },
+  required: ["size", "service", "elev", "note"],
+};
+const equipItem = {
+  type: "object", additionalProperties: false,
+  properties: { tag: STR, type: STR, elev: STR, note: STR },
+  required: ["tag", "type", "elev", "note"],
+};
+const BLUEPRINT_SCHEMA = {
+  type: "object", additionalProperties: false,
+  properties: {
+    confidence: { type: "number" },
+    summary: { type: "string" },
+    data: {
+      type: "object", additionalProperties: false,
+      properties: {
+        sheet_number: STR, title: STR, discipline: STR, revision: STR, scale: STR, system: STR,
+        grids: STR_ARR,
+        piping: { type: "array", items: pipingItem },
+        ductwork: { type: "array", items: ductItem },
+        equipment: { type: "array", items: equipItem },
+        risers: STR_ARR, hangers: STR_ARR, dimensions: STR_ARR, field_notes: STR_ARR, ambiguities: STR_ARR,
+      },
+      required: [
+        "sheet_number", "title", "discipline", "revision", "scale", "system", "grids",
+        "piping", "ductwork", "equipment", "risers", "hangers", "dimensions", "field_notes", "ambiguities",
+      ],
+    },
+  },
+  required: ["confidence", "summary", "data"],
+};
+
 async function extractBlueprintWithClaude(bytes: Uint8Array, mime: string, caption?: string): Promise<ClassifiedDoc> {
   if (!ANTHROPIC_KEY) throw new Error("no ANTHROPIC_API_KEY");
   const isPdf = mime === "application/pdf";
@@ -282,25 +327,36 @@ async function extractBlueprintWithClaude(bytes: Uint8Array, mime: string, capti
     ? { type: "document", source: { type: "base64", media_type: "application/pdf", data } }
     : { type: "image", source: { type: "base64", media_type: media, data } };
 
-  const body = JSON.stringify({
+  const buildBody = (useSchema: boolean) => JSON.stringify({
     model:      CLAUDE_VISION_MODEL,
     max_tokens: 12000,
     thinking:      { type: "adaptive" },
-    output_config: { effort: "high" },
+    output_config: useSchema
+      ? { effort: "high", format: { type: "json_schema", schema: BLUEPRINT_SCHEMA } } // guaranteed-valid JSON
+      : { effort: "high" },
     messages: [{ role: "user", content: [{ type: "text", text: VRF_BLUEPRINT_PROMPT + captionLine }, sourceBlock] }],
   });
 
+  let useSchema = true;
   let lastErr = "unknown error";
-  for (let attempt = 0; attempt < 3; attempt++) {
+  for (let attempt = 0; attempt < 4; attempt++) {
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: { "x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-      body,
+      body: buildBody(useSchema),
     });
 
     if (res.status === 429 || res.status === 500 || res.status === 529) {
       lastErr = `HTTP ${res.status}`;
       await new Promise((r) => setTimeout(r, 1500 * 2 ** attempt)); // 1.5s, 3s, 6s
+      continue;
+    }
+    // If structured outputs is ever rejected, drop the schema once and retry
+    // plain — never worse than the previous prompt-and-parse behavior.
+    if (res.status === 400 && useSchema) {
+      lastErr = `400 with schema: ${(await res.text()).slice(0, 160)}`;
+      console.error("Claude structured-output rejected, retrying without schema:", lastErr);
+      useSchema = false;
       continue;
     }
     if (!res.ok) throw new Error(`Claude vision ${res.status}: ${(await res.text()).slice(0, 200)}`);
