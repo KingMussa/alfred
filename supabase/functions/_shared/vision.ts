@@ -8,6 +8,7 @@
 // ╚═══════════════════════════════════════════════════════════════════════╝
 
 import { encodeBase64 } from "https://deno.land/std@0.224.0/encoding/base64.ts";
+import { logCost, underCostCap } from "./cost.ts";
 
 const URL = Deno.env.get("SUPABASE_URL")!;
 const KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -196,6 +197,7 @@ export async function classifyAndExtract(
     const data = await r.json();
     const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!text) throw new Error("Gemini returned no text — possibly safety block");
+    await logCost("gemini-2.5-flash", data?.usageMetadata?.promptTokenCount ?? 0, data?.usageMetadata?.candidatesTokenCount ?? 0, "vision-classify");
 
     try {
       const obj = parseJsonLoose(text) as unknown as {
@@ -316,6 +318,9 @@ const BLUEPRINT_SCHEMA = {
 
 async function extractBlueprintWithClaude(bytes: Uint8Array, mime: string, caption?: string): Promise<ClassifiedDoc> {
   if (!ANTHROPIC_KEY) throw new Error("no ANTHROPIC_API_KEY");
+  // Hard cap: if 24h AI spend is over the limit, skip the paid Opus read —
+  // readDocument catches this and falls back to the free Gemini extraction.
+  if (!(await underCostCap())) throw new Error("daily AI cost cap reached — using free Gemini read");
   const isPdf = mime === "application/pdf";
   const media = ["image/jpeg", "image/png", "image/gif", "image/webp"].includes(mime) ? mime : "image/jpeg";
   const captionLine = caption ? `\n\nField caption from the fitter: "${caption}"` : "";
@@ -365,6 +370,7 @@ async function extractBlueprintWithClaude(bytes: Uint8Array, mime: string, capti
     const blocks: Array<{ type?: string; text?: string }> = Array.isArray(j?.content) ? j.content : [];
     const out = blocks.filter((b) => b.type === "text").map((b) => b.text ?? "").join("\n").trim();
     if (!out) throw new Error("Claude vision returned no text block");
+    await logCost("claude-opus-4-8", j?.usage?.input_tokens ?? 0, j?.usage?.output_tokens ?? 0, "blueprint-vision");
 
     const obj = parseJsonLoose(out);
     return {

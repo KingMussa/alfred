@@ -2,6 +2,8 @@
 // Set ANTHROPIC_API_KEY in Supabase secrets to use Claude.
 // If Claude is unset OR fails after retries, falls back to Gemini automatically.
 
+import { logCost } from "./cost.ts";
+
 const ANTHROPIC_KEY = Deno.env.get("ANTHROPIC_API_KEY");
 const GEMINI_KEY    = Deno.env.get("GEMINI_API_KEY");
 
@@ -62,6 +64,7 @@ async function claudeChat(prompt: string, maxTokens: number): Promise<string> {
     if (typeof text !== "string") {
       throw new Error(`Claude returned no text. Raw: ${JSON.stringify(data).slice(0, 300)}`);
     }
+    await logCost("claude-haiku-4-5", data?.usage?.input_tokens ?? 0, data?.usage?.output_tokens ?? 0, "aiChat");
     return text;
   }
 
@@ -109,6 +112,7 @@ async function geminiChat(prompt: string, maxTokens: number): Promise<string> {
     if (typeof text !== "string") {
       throw new Error(`Gemini returned no text. Raw: ${JSON.stringify(data).slice(0, 300)}`);
     }
+    await logCost("gemini-2.5-flash", data?.usageMetadata?.promptTokenCount ?? 0, data?.usageMetadata?.candidatesTokenCount ?? 0, "aiChat");
     return text;
   }
 

@@ -57,6 +57,7 @@ import {
 } from "../_shared/finance.ts";
 import { saveTurn, recentTurns, memoryBlock, audit, setPref, getPref } from "../_shared/memory.ts";
 import { logIncome, taxStatus, setReservePct } from "../_shared/income.ts";
+import { costStatus, setCostCap } from "../_shared/cost.ts";
 import {
   netWorthReport, formatNetWorthBlock,
   getAssets, getLiabilities, updateAssetBalance, updateLiabilityBalance,
@@ -345,6 +346,13 @@ async function cmdTaxRate(arg: string): Promise<string> {
   if (!isFinite(pct) || pct <= 0 || pct > 60) return "🧾 Usage: /taxrate <pct>   e.g. /taxrate 30\n(% of 1099 income to set aside for taxes)";
   await setReservePct(pct);
   return `🧾 Tax-reserve rate set to ${pct}% of 1099 income. New solar/creative income reserves at this rate.`;
+}
+
+async function cmdCostCap(arg: string): Promise<string> {
+  const usd = Number(arg.replace(/[^\d.]/g, ""));
+  if (!isFinite(usd) || usd <= 0) return "💵 Usage: /costcap <amt>   e.g. /costcap 5\n(daily AI spend limit — over it, blueprint reads use free Gemini)";
+  await setCostCap(usd);
+  return `💵 Daily AI cost cap set to $${usd.toFixed(2)}. Over it, Opus vision pauses and reads fall back to free Gemini.`;
 }
 
 async function cmdExpense(arg: string): Promise<string> {
@@ -812,6 +820,7 @@ async function cmdStart(): Promise<string> {
     "",
     "SYSTEM",
     "  /status · /version · /quiet 22:00-06:30",
+    "  /cost — AI spend + cap · /costcap <amt>",
     "",
     "🎙️ VOICE NOTES (NEW)",
     "  Tap-and-hold the mic, talk — I transcribe it",
@@ -1096,6 +1105,8 @@ async function route(text: string): Promise<string> {
   if (lc.startsWith("/income"))   return cmdIncome(arg);
   if (lc.startsWith("/taxrate"))  return cmdTaxRate(arg);
   if (lc.startsWith("/tax"))      return taxStatus();
+  if (lc.startsWith("/costcap"))  return cmdCostCap(arg);
+  if (lc.startsWith("/cost"))     return costStatus();
 
   // v4 — Wealth modeling
   if (lc.startsWith("/networth")) return cmdNet();
@@ -1219,7 +1230,7 @@ Deno.serve(async (req) => {
   const userText = message.text;
   try {
     const reply = await route(userText);
-    const trivial = /^\/(status|version|help|start|todos|habits|bills|spending|irs|news|calendar|captures|blueprint|bp|net|assets|debts|goals|payoff|portfolio|decisions|cash|forecast|tax)/i.test(userText.trim());
+    const trivial = /^\/(status|version|help|start|todos|habits|bills|spending|irs|news|calendar|captures|blueprint|bp|net|assets|debts|goals|payoff|portfolio|decisions|cash|forecast|tax|cost)/i.test(userText.trim());
     if (!trivial) {
       await saveTurn("user", userText);
       await saveTurn("assistant", reply.slice(0, 2000));
