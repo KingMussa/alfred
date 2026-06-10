@@ -1,5 +1,13 @@
 project_id = "your-project-id"
 
+# Telegram posts to this webhook with NO Supabase JWT (it uses the
+# X-Telegram-Bot-Api-Secret-Token header instead), so JWT verification MUST be
+# off or every message delivery is rejected with 401 at the gateway. The
+# deprecated --no-verify-jwt CLI flag does not reliably set this in CLI 2.x —
+# it has to live here.
+[functions.telegram-webhook]
+verify_jwt = false
+
 [functions.morning-briefing]
 verify_jwt = false
 
