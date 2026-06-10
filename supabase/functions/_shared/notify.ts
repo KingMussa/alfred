@@ -18,7 +18,7 @@ export interface NotifyResult {
 }
 
 export async function notify(body: string): Promise<NotifyResult> {
-  const tasks: Array<Promise<["sms" | "telegram", "ok" | "skipped" | { error: string }]>> = [];
+  const tasks: Array<Promise<readonly ["sms" | "telegram", "ok" | "skipped" | { error: string }]>> = [];
 
   if (smsConfigured()) {
     tasks.push(
