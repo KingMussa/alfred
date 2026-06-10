@@ -1,7 +1,22 @@
 # Alfred — Status
 
-**Version: v6-field-capture  · Last upgrade: 2026-06-09**
+**Version: v8 — field capture + tax guardrail  · Last upgrade: 2026-06-09**
 **Live since: 2026-05-23**
+
+## v8 (2026-06-09) — Income tracking + tax-reserve guardrail
+- **The 1099 protection** against a repeat IRS hole. Solar (Sunrun) commission is 1099/untaxed.
+- New `income` table + `_shared/income.ts`. Log income by stream: **`/income <amt> <stream>`** (union/solar/creative/spouse/other). 1099 streams (solar, creative) **auto-reserve a % (default 30) into a running tax set-aside**; W2 doesn't.
+- **`/tax`** — reserve total, 1099 income YTD, income by stream, next estimated-tax date (15 Apr/Jun/Sep/Jan). **`/taxrate <pct>`** — set the rate (stored in `preferences.tax_reserve_pct`).
+- `morning-briefing` surfaces an estimated-tax reminder within 10 days of a due date.
+
+## v7 (2026-06-09) — Image-pipeline hardening + MEP broadening
+- **Reliability:** idempotency via `processed_updates` (dedupe Telegram retries); photo/voice/PDF now ack 200 instantly and process in `EdgeRuntime.waitUntil` (no retry-dupes during 15-40s Claude reads); retry/backoff on Gemini (429/500/503/529) and Claude vision; **Gemini-failure falls back to Claude** so a read never hard-fails.
+- **Blueprint reader broadened VRF → general MEP** (piping/ductwork/equipment; VRF is a subset). Reads via **Claude Opus 4.8 vision**, gated to blueprints. **PDF support** (Claude document blocks). `/blueprints`, `/bp <id>`.
+- **Image compression** (`_shared/compress.ts`, ImageScript) — resize big jobsite files to 2560px before vision + storage (stays under Anthropic's 5MB limit). **Base64** switched to std `encodeBase64` (the chunked-spread form overflowed the edge runtime's stack on multi-MB images).
+- **Durable image archive** to private Supabase Storage bucket `alfred-docs` (`documents.storage_path`); `/bp <id>` re-sends the stored sheet.
+- **Engine fix** (`_shared/ai.ts`): real Claude→Gemini fallback (was dead) + retry on {429,500,529}.
+- **Safer auto-expense:** receipts under 0.6 confidence no longer auto-log — Alfred replies a `/expense` to confirm.
+- **Ops:** Gmail `GOOGLE_REFRESH_TOKEN` regenerated; OAuth consent screen **published to production** (kills the 7-day testing-mode token expiry). New tables: `processed_updates`, `income`; new column `documents.storage_path`; bucket `alfred-docs`.
 
 ## v6 (2026-06-09) — Field capture: voice notes + VRF blueprint reading
 - **Voice notes** — tap-and-hold the mic in Telegram → Gemini 2.5 Flash transcription → routed through the *same* command router as typed text. Spoken intent words ("todo …", "note …", "spent …") map to the matching slash command; the reply echoes the transcript so Dave can trust it. New `_shared/voice.ts`; no new secret (reuses `GEMINI_API_KEY`).

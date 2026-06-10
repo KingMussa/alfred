@@ -73,7 +73,7 @@ const ALLOWED_CHAT_ID = Deno.env.get("TELEGRAM_CHAT_ID") ?? "";
 const PROJECT_URL     = "https://rwhfueaclqcunnoraaix.supabase.co";
 const ANON_KEY        = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
 const SERVICE_KEY     = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ANON_KEY;
-const VERSION         = "v3-robust (2026-05-26)";
+const VERSION         = "v8 — field capture + tax guardrail (2026-06-09)";
 const BATCH_SIZE      = 5;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -772,7 +772,14 @@ async function cmdStart(): Promise<string> {
     "  /cash      — today's safe-to-spend",
     "  /forecast  — 90-day cash flow",
     "",
-    "FINANCIAL — WEALTH MODELING (NEW)",
+    "INCOME & TAX (NEW)",
+    "  /income <amt> <stream> [note]",
+    "    streams: union · solar · creative · spouse",
+    "    1099 (solar/creative) auto-reserves for taxes",
+    "  /tax       — tax set-aside + next est. due date",
+    "  /taxrate <pct>  — set reserve % (default 30)",
+    "",
+    "FINANCIAL — WEALTH MODELING",
     "  /net       — net worth + 7d/30d delta",
     "  /assets · /asset <id> <bal>",
     "  /debts · /debt <id> <bal>",
@@ -806,13 +813,21 @@ async function cmdStart(): Promise<string> {
     "SYSTEM",
     "  /status · /version · /quiet 22:00-06:30",
     "",
-    "📸 SNAP A PHOTO (NEW)",
-    "  Receipt → auto-logged as expense",
-    "  Bank statement → balance extracted",
-    "  Credit card statement → debt + spending",
-    "  Paystub → income detected",
-    "  IRS letter → flagged + todo created",
-    "  (works with photos OR PDFs attached as documents)",
+    "🎙️ VOICE NOTES (NEW)",
+    "  Tap-and-hold the mic, talk — I transcribe it",
+    "  and route it (say 'todo…', 'note…', 'spent…').",
+    "",
+    "📐 BLUEPRINTS (NEW)",
+    "  Snap/send a mechanical print → I pull pipe",
+    "  sizes, BOI/elevations, equipment, hangers.",
+    "  /blueprints — recent · /bp <id> — re-show a sheet",
+    "  (send as a FILE, shot flat + lit, for the best read)",
+    "",
+    "📸 SNAP A PHOTO",
+    "  Receipt → expense (low-confidence asks first)",
+    "  Bank/credit statement → balance extracted",
+    "  Paystub → income · IRS letter → flagged + todo",
+    "  (photos OR PDFs attached as documents)",
     "",
     "Or just talk to me — I remember the last two weeks of our chats.",
   ].join("\n");
