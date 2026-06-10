@@ -131,15 +131,15 @@ id_document:
     "redacted": true,
     "note": "We do NOT extract full PII — just acknowledge the document type." }
 
-blueprint (a VRF refrigerant piping coordination drawing — Mitsubishi/Daikin City-Multi style. RL = refrigerant liquid line, RG = refrigerant gas line; BOI = bottom-of-insulation elevation; AFF = above finished floor; BC = branch controller; VRF/VCU/HPCU/HPAH = units; UP/DN = riser; TYP-n = repeats n times):
-  { "sheet_number": "M-501", "title": "Level 3 VRF Piping Plan",
-    "discipline": "mechanical / VRF refrigerant",
+blueprint (any mechanical / MEP coordination drawing — VRF refrigerant, chilled/hot water, ductwork, or plumbing. RL/RG = refrigerant liquid/gas; CHWS/CHWR = chilled water; HWS/HWR = hot water; BOI = bottom-of-insulation, AFF = above finished floor, INV = invert; equipment = VRF/AHU/VAV/FCU/RTU/pump/chiller/BC controller; UP/DN = riser; TYP-n = repeats n times):
+  { "sheet_number": "M-501", "title": "Level 3 Mechanical Plan",
+    "discipline": "mechanical (VRF | chilled water | ductwork | plumbing)",
     "revision": "3", "scale": "1/4 in = 1 ft",
-    "system": "Mitsubishi City Multi R2 (heat recovery) or similar",
+    "system": "e.g. Mitsubishi City Multi VRF, or chilled-water RTUs",
     "grids": ["24","25","Column E"],
-    "indoor_units":  [ { "tag": "VRF-46 1122-1", "type": "cassette | ducted | air handler", "aff": "8 ft 0 in" } ],
-    "controllers":   [ { "tag": "BC-46", "type": "BC controller | CMY-Y202S-G2 branch joint", "aff": "13 ft 0 in" } ],
-    "refrigerant_lines": [ { "kind": "RL | RG", "size": "3/8 in", "boi": "17 ft 10 3/4 in", "note": "TYP-2 | to VRF-39-1125-1" } ],
+    "piping":    [ { "service": "RL | RG | CHWS | HWR | ...", "size": "3/8 in", "material": "copper | steel", "elev": "BOI 17 ft 10 in", "note": "TYP-2" } ],
+    "ductwork":  [ { "size": "24x12", "service": "supply | return | exhaust", "elev": "", "note": "" } ],
+    "equipment": [ { "tag": "VRF-46 / RTU-3 / BC-46", "type": "cassette | RTU | pump | BC controller", "elev": "10 ft 0 in AFF", "note": "" } ],
     "risers":      [ "UP TO VCU-46", "UP TO HPCU-01" ],
     "hangers":     [ "red field markups, e.g. 'Add Hanger near Column E', 'Center Hanger'" ],
     "dimensions":  [ "locating dims, e.g. '12 ft 0 5/8 in'" ],
@@ -151,7 +151,7 @@ other:
 
 If you can't read fields clearly, use null. If the image is blurry/unreadable, set doc_type=other with confidence < 0.3.
 
-For blueprint: it's usually a phone photo of a much larger VRF sheet, so text may be small or partly cut off. Read every RL/RG line with its size + BOI, and every unit tag with its AFF. Use empty arrays [] for sections that aren't visible — never invent sizes, counts, or elevations. Put anything unreadable in "ambiguities". Still set doc_type=blueprint when it's clearly a piping/refrigerant drawing, even if you can only read the title block.
+For blueprint: it's usually a phone photo of a much larger sheet, so text may be small or partly cut off. Read every pipe/duct run with its size + elevation, and every equipment tag. Read whatever the sheet actually is — don't force VRF. Use empty arrays [] for sections that aren't visible — never invent sizes, counts, or elevations. Put anything unreadable in "ambiguities". Still set doc_type=blueprint when it's clearly a mechanical/piping drawing, even if you can only read the title block.
 
 Output ONLY the JSON.`;
 
@@ -221,38 +221,39 @@ export async function classifyAndExtract(
 // shot, so blueprints get read by Claude when ANTHROPIC_API_KEY is set.
 
 const VRF_BLUEPRINT_PROMPT =
-`You are a senior MEP detailer reading a VRF refrigerant piping coordination drawing
-(Mitsubishi/Daikin City-Multi style), usually a jobsite phone photo of part of a larger sheet.
+`You are a senior MEP detailer reading a mechanical coordination drawing — usually a jobsite
+phone photo of part of a larger sheet. It may be VRF refrigerant, chilled/hot water, ductwork,
+plumbing, or mixed. Read whatever it actually is — do not force it to be VRF.
 
 Decode this trade language:
-- RL = refrigerant LIQUID line, RG = refrigerant GAS line (sizes like 1/4", 3/8", 1/2", 5/8", 7/8", 1 1/8")
-- BOI = Bottom Of Insulation elevation (install height of the bottom of the insulated line)
-- AFF = Above Finished Floor (unit mounting height)
-- BC = Branch Controller; CMY-Y... = Mitsubishi branch / Y-joint
-- VRF / VCU / HPCU / HPAH = indoor units, condensing units, heat-pump air handler
-- "UP TO X" / UP-DN circles = risers up/down to a unit on another level
-- TYP-n = the callout repeats at n identical locations
-- purple bundles = the line-sets running together; numbers in circles / "Column E" = grid refs
-- red text/arrows + "Add Hanger" / "Center Hanger" = field markups for pipe supports
+- Pipe services: RL = refrigerant liquid, RG = refrigerant gas; CHWS/CHWR = chilled water supply/return;
+  HWS/HWR = hot water supply/return; CW/HW = domestic cold/hot; plus waste, vent, gas, steam, condensate
+- Duct: sizes like 24x12; services supply / return / exhaust / outside-air
+- BOI = Bottom Of Insulation elevation; AFF = Above Finished Floor (mounting height); INV = invert
+- Equipment tags: VRF/cassette/ducted indoor units, AHU, VAV, FCU, RTU, pump, chiller, boiler,
+  BC controller, CMY-Y branch joint, VCU/HPCU/HPAH
+- "UP TO X" / UP-DN circles = risers up/down to another level; TYP-n = repeats n times
+- numbers in circles / "Column E" = grid refs; red text + "Add Hanger"/"Center Hanger" = field support markups
 
 Extract EVERYTHING you can read into this exact JSON shape (no prose, no markdown fences):
 
 { "confidence": <0..1>,
-  "summary": "<one line, e.g. 'L3 VRF plan grids 24-25, BC-46/47 feeding cassettes 7-8ft AFF'>",
+  "summary": "<one line, e.g. 'L3 chilled-water roof plan grids 17-22.5, 9 RTUs, no VRF lines'>",
   "data": {
-    "sheet_number": null, "title": null, "discipline": "VRF refrigerant",
+    "sheet_number": null, "title": null, "discipline": null,
     "revision": null, "scale": null, "system": null,
     "grids": [],
-    "indoor_units":      [ { "tag": "", "type": "", "aff": "" } ],
-    "controllers":       [ { "tag": "", "type": "", "aff": "" } ],
-    "refrigerant_lines": [ { "kind": "RL|RG", "size": "", "boi": "", "note": "" } ],
+    "piping":    [ { "service": "RL|RG|CHWS|HWR|...", "size": "", "material": "", "elev": "", "note": "" } ],
+    "ductwork":  [ { "size": "24x12", "service": "supply|return|exhaust", "elev": "", "note": "" } ],
+    "equipment": [ { "tag": "", "type": "", "elev": "", "note": "" } ],
     "risers": [], "hangers": [], "dimensions": [], "field_notes": [], "ambiguities": []
   } }
 
-Rules: read every RL/RG line with its size and BOI. Capture every unit tag with its AFF.
-Record red-pen hanger markups under "hangers" and any handwriting under "field_notes".
-Use empty arrays / null where you genuinely can't read it — NEVER invent sizes, counts, or
-elevations. Put glare / cutoff / unreadable spots in "ambiguities". Output ONLY the JSON object.`;
+Rules: read every pipe/duct run with its size + elevation (BOI/AFF/INV), and every equipment tag.
+For VRF sheets, put RL/RG lines under "piping" with service "RL"/"RG". Record red-pen hanger
+markups under "hangers" and handwriting under "field_notes". Use empty arrays / null where you
+genuinely can't read it — NEVER invent sizes, counts, or elevations. Put glare / cutoff /
+unreadable spots in "ambiguities". Output ONLY the JSON object.`;
 
 // Native std encoder — spreading bytes into String.fromCharCode(...) (even in
 // chunks) overflows the edge runtime's call stack on multi-MB images.
@@ -430,6 +431,15 @@ async function actReceipt(c: ClassifiedDoc): Promise<ActionResult> {
     return { action_taken: "captured", reply: `🧾 Receipt detected but no amount read. Saved for review.\n${c.summary}` };
   }
   const category = mapCategory(d.category_guess);
+
+  // Don't auto-write a possibly-wrong expense from a blurry read — confirm first.
+  if (c.confidence < 0.6) {
+    return {
+      action_taken: "captured",
+      reply: `🧾 Receipt: $${d.amount.toFixed(2)} ${category} (${(c.confidence * 100).toFixed(0)}% read — low confidence)\nNOT auto-logged. If that's right, confirm:\n/expense ${d.amount} ${category}${d.vendor ? ` ${d.vendor}` : ""}`,
+    };
+  }
+
   const note = `${d.vendor ?? "unknown"}${d.items_count ? ` · ${d.items_count} items` : ""}`;
   const r = await fetch(`${URL}/rest/v1/expenses`, {
     method: "POST",
@@ -539,9 +549,13 @@ interface BlueprintData {
   sheet_number?: string; title?: string; discipline?: string;
   revision?: string; scale?: string; system?: string;
   grids?: string[];
+  piping?:    Array<{ service?: string; size?: string; material?: string; elev?: string; note?: string }>;
+  ductwork?:  Array<{ size?: string; service?: string; elev?: string; note?: string }>;
+  equipment?: Array<{ tag?: string; type?: string; elev?: string; note?: string }>;
+  // legacy VRF-only fields (captures from before the MEP broadening) — still rendered
+  refrigerant_lines?: Array<{ kind?: string; size?: string; boi?: string; note?: string }>;
   indoor_units?: Array<{ tag?: string; type?: string; aff?: string }>;
   controllers?:  Array<{ tag?: string; type?: string; aff?: string }>;
-  refrigerant_lines?: Array<{ kind?: string; size?: string; boi?: string; note?: string }>;
   risers?: string[];
   hangers?: string[];
   dimensions?: string[];
@@ -553,31 +567,42 @@ async function actBlueprint(c: ClassifiedDoc): Promise<ActionResult> {
   const d = c.data as BlueprintData;
   const L: string[] = [];
 
+  // Fold any legacy VRF fields into the unified shape so old captures still render.
+  const piping: Array<{ service?: string; size?: string; material?: string; elev?: string; note?: string }> = [
+    ...(d.piping ?? []),
+    ...(d.refrigerant_lines ?? []).map((r) => ({ service: r.kind, size: r.size, elev: r.boi, note: r.note })),
+  ];
+  const equipment: Array<{ tag?: string; type?: string; elev?: string; note?: string }> = [
+    ...(d.equipment ?? []),
+    ...(d.indoor_units ?? []).map((u) => ({ tag: u.tag, type: u.type, elev: u.aff })),
+    ...(d.controllers ?? []).map((b) => ({ tag: b.tag, type: b.type, elev: b.aff })),
+  ];
+  const ductwork = d.ductwork ?? [];
+
   // Title block
-  L.push(["📐 BLUEPRINT", d.sheet_number, d.revision ? `Rev ${d.revision}` : ""].filter(Boolean).join(" ") + " — VRF Refrigerant");
-  const sub = [d.title, d.scale ? `Scale ${d.scale}` : ""].filter(Boolean).join(" · ");
+  L.push(["📐 BLUEPRINT", d.sheet_number, d.revision ? `Rev ${d.revision}` : ""].filter(Boolean).join(" "));
+  const sub = [d.title, d.scale ? `Scale ${d.scale}` : "", d.discipline].filter(Boolean).join(" · ");
   if (sub) L.push(sub);
   if (d.system) L.push(d.system);
   if (d.grids?.length) L.push(`Grids: ${d.grids.join(", ")}`);
 
-  // Refrigerant lines — the heart of the sheet: size + RL/RG + BOI elevation
-  if (d.refrigerant_lines?.length) {
-    L.push("", `REFRIGERANT LINES (${d.refrigerant_lines.length})`);
-    for (const r of d.refrigerant_lines.slice(0, 24)) {
-      const head = [r.size, r.kind].filter(Boolean).join(" ");
-      L.push(`• ${head}${r.boi ? `  BOI ${r.boi}` : ""}${r.note ? `  (${r.note})` : ""}`);
+  if (piping.length) {
+    L.push("", `PIPING (${piping.length})`);
+    for (const p of piping.slice(0, 24)) {
+      const head = [p.size, p.service, p.material].filter(Boolean).join(" ");
+      L.push(`• ${head}${p.elev ? `  ${p.elev}` : ""}${p.note ? `  (${p.note})` : ""}`);
     }
   }
-  if (d.indoor_units?.length) {
-    L.push("", "INDOOR UNITS");
-    for (const u of d.indoor_units.slice(0, 18)) {
-      L.push(`• ${[u.tag, u.type].filter(Boolean).join(" ")}${u.aff ? ` @ ${u.aff} AFF` : ""}`);
+  if (ductwork.length) {
+    L.push("", `DUCTWORK (${ductwork.length})`);
+    for (const dk of ductwork.slice(0, 16)) {
+      L.push(`• ${[dk.size, dk.service].filter(Boolean).join(" ")}${dk.elev ? `  ${dk.elev}` : ""}${dk.note ? `  (${dk.note})` : ""}`);
     }
   }
-  if (d.controllers?.length) {
-    L.push("", "CONTROLLERS / JOINTS");
-    for (const b of d.controllers.slice(0, 12)) {
-      L.push(`• ${[b.tag, b.type].filter(Boolean).join(" — ")}${b.aff ? ` @ ${b.aff} AFF` : ""}`);
+  if (equipment.length) {
+    L.push("", "EQUIPMENT");
+    for (const e of equipment.slice(0, 18)) {
+      L.push(`• ${[e.tag, e.type].filter(Boolean).join(" ")}${e.elev ? ` @ ${e.elev}` : ""}${e.note ? ` (${e.note})` : ""}`);
     }
   }
   if (d.risers?.length) {
@@ -600,7 +625,7 @@ async function actBlueprint(c: ClassifiedDoc): Promise<ActionResult> {
     L.push("(send as a FILE, not a photo + shoot flat/lit = better read)");
   }
 
-  const hasContent = d.refrigerant_lines?.length || d.indoor_units?.length || d.controllers?.length;
+  const hasContent = piping.length || ductwork.length || equipment.length;
   if (!hasContent && !d.sheet_number) {
     return {
       action_taken: "captured",

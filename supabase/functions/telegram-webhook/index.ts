@@ -307,13 +307,16 @@ async function cmdBlueprintShow(idStr: string): Promise<string> {
 
   const d = (r.extracted_data ?? {}) as {
     sheet_number?: string; title?: string; revision?: string;
-    refrigerant_lines?: unknown[]; indoor_units?: unknown[]; controllers?: unknown[];
+    piping?: unknown[]; ductwork?: unknown[]; equipment?: unknown[];
+    refrigerant_lines?: unknown[]; indoor_units?: unknown[]; controllers?: unknown[]; // legacy
   };
   const head = [d.sheet_number, d.revision ? `Rev ${d.revision}` : "", d.title].filter(Boolean).join(" · ");
+  const pipeN = (d.piping?.length ?? 0) + (d.refrigerant_lines?.length ?? 0);
+  const equipN = (d.equipment?.length ?? 0) + (d.indoor_units?.length ?? 0) + (d.controllers?.length ?? 0);
   const counts = [
-    d.refrigerant_lines?.length ? `${d.refrigerant_lines.length} lines` : "",
-    d.indoor_units?.length ? `${d.indoor_units.length} units` : "",
-    d.controllers?.length ? `${d.controllers.length} controllers` : "",
+    pipeN ? `${pipeN} pipe runs` : "",
+    d.ductwork?.length ? `${d.ductwork.length} ducts` : "",
+    equipN ? `${equipN} equipment` : "",
   ].filter(Boolean).join(" · ");
   return [
     `📐 Document #${r.id}${r.storage_path ? "" : "  (no archived image)"}`,
