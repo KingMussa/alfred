@@ -17,6 +17,7 @@ import { getAllStreaks, formatHabitsBlock, getRecentCaptures } from "../_shared/
 import { audited, audit, recordHealth } from "../_shared/memory.ts";
 import { netWorthReport, formatNetWorthBlock } from "../_shared/wealth.ts";
 import { dailyBudget, formatDailyBudgetBlock } from "../_shared/forecast.ts";
+import { estimatedTaxReminder } from "../_shared/income.ts";
 
 async function safe<T>(fn: () => Promise<T>, fallback: T): Promise<T> {
   try { return await fn(); } catch (e) { console.error("brief-context-fail:", e); return fallback; }
@@ -64,6 +65,7 @@ Deno.serve(async () => {
     // ── Deterministic data blocks (no AI for these) ──────────────────────────
     const irsLine     = irs ? formatIrsLine(irs) : "";
     const weatherLine = weather ? formatWeatherLine(weather) : "";
+    const taxReminder = estimatedTaxReminder() ?? ""; // only within 10d of an estimated-tax date
 
     const billsLine = bills.length
       ? "📅 BILLS DUE\n" + bills.map(({ bill, daysOut, due }) => {
@@ -140,6 +142,7 @@ LENGTH: 1600-2200 chars total. Blank lines between sections.`;
       `🦇 ALFRED — ${todayStr.toUpperCase()}`,
       weatherLine,
       irsLine,
+      taxReminder,
       netWorthBlock,
       cashBlock,
       billsLine,

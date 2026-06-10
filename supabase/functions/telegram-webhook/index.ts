@@ -56,6 +56,7 @@ import {
   getBillsDueSoon, getSpendingStatus, formatSpendingBlock,
 } from "../_shared/finance.ts";
 import { saveTurn, recentTurns, memoryBlock, audit, setPref, getPref } from "../_shared/memory.ts";
+import { logIncome, taxStatus, setReservePct } from "../_shared/income.ts";
 import {
   netWorthReport, formatNetWorthBlock,
   getAssets, getLiabilities, updateAssetBalance, updateLiabilityBalance,
@@ -327,6 +328,25 @@ async function cmdBlueprintShow(idStr: string): Promise<string> {
 // ─────────────────────────────────────────────────────────────────────────────
 // FINANCIAL handlers
 // ─────────────────────────────────────────────────────────────────────────────
+async function cmdIncome(arg: string): Promise<string> {
+  const m = arg.match(/^\$?([\d,]+(?:\.\d+)?)\s+(\S+)\s*(.*)$/);
+  if (!m) return "💰 Usage: /income <amt> <stream> [note]\nstreams: union, solar, creative, spouse, other\nEx: /income 1200 solar 3 installs this week";
+  const gross = Number(m[1].replace(/,/g, ""));
+  if (!isFinite(gross) || gross <= 0) return "Amount not understood. Try: /income 1200 solar";
+  const { row, pct } = await logIncome(m[2], gross, m[3]?.trim() || undefined);
+  const reserveLine = row.is_1099
+    ? `\n🧾 Reserved ${pct}% for taxes: $${Number(row.tax_reserved).toFixed(2)} (1099 — untaxed, set it aside)`
+    : `\n(W2 — already withheld, no reserve)`;
+  return `💰 LOGGED: $${gross.toLocaleString()} ${row.stream}${reserveLine}\n\nRunning set-aside: /tax`;
+}
+
+async function cmdTaxRate(arg: string): Promise<string> {
+  const pct = Number(arg.replace(/[^\d.]/g, ""));
+  if (!isFinite(pct) || pct <= 0 || pct > 60) return "🧾 Usage: /taxrate <pct>   e.g. /taxrate 30\n(% of 1099 income to set aside for taxes)";
+  await setReservePct(pct);
+  return `🧾 Tax-reserve rate set to ${pct}% of 1099 income. New solar/creative income reserves at this rate.`;
+}
+
 async function cmdExpense(arg: string): Promise<string> {
   const parsed = parseExpense(arg);
   if (!parsed) return "💸 Usage: /expense <amount> <category> [note]\nCategories: atm dining casino amazon gas groceries apple_cash subscription gear\nEx: /expense 75 atm pulled cash for the weekend";
@@ -1058,6 +1078,9 @@ async function route(text: string): Promise<string> {
   if (lc.startsWith("/expense"))  return cmdExpense(arg);
   if (lc.startsWith("/cash"))     return cmdCash();
   if (lc.startsWith("/forecast")) return cmdForecast();
+  if (lc.startsWith("/income"))   return cmdIncome(arg);
+  if (lc.startsWith("/taxrate"))  return cmdTaxRate(arg);
+  if (lc.startsWith("/tax"))      return taxStatus();
 
   // v4 — Wealth modeling
   if (lc.startsWith("/networth")) return cmdNet();
@@ -1181,7 +1204,7 @@ Deno.serve(async (req) => {
   const userText = message.text;
   try {
     const reply = await route(userText);
-    const trivial = /^\/(status|version|help|start|todos|habits|bills|spending|irs|news|calendar|captures|blueprint|bp|net|assets|debts|goals|payoff|portfolio|decisions|cash|forecast)/i.test(userText.trim());
+    const trivial = /^\/(status|version|help|start|todos|habits|bills|spending|irs|news|calendar|captures|blueprint|bp|net|assets|debts|goals|payoff|portfolio|decisions|cash|forecast|tax)/i.test(userText.trim());
     if (!trivial) {
       await saveTurn("user", userText);
       await saveTurn("assistant", reply.slice(0, 2000));
