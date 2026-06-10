@@ -337,8 +337,8 @@ async function extractBlueprintWithClaude(bytes: Uint8Array, mime: string, capti
     max_tokens: 12000,
     thinking:      { type: "adaptive" },
     output_config: useSchema
-      ? { effort: "high", format: { type: "json_schema", schema: BLUEPRINT_SCHEMA } } // guaranteed-valid JSON
-      : { effort: "high" },
+      ? { effort: "medium", format: { type: "json_schema", schema: BLUEPRINT_SCHEMA } } // guaranteed-valid JSON; medium = faster jobsite replies
+      : { effort: "medium" },
     messages: [{ role: "user", content: [{ type: "text", text: VRF_BLUEPRINT_PROMPT + captionLine }, sourceBlock] }],
   });
 
